@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --row: #f5f6f8;
+  --row-hover: #ebedf5;
+  --track: #e6e9ef;
+  --selection: #cce5ff;
+  --border: #d0d4e4;
+  --text: #323338;
+  --muted: #676879;
+  --primary: #0073ea;
+  --danger: #e2445c;
+  --success: #00c875;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #18191c;
+  --surface: #222326;
+  --row: #2b2c30;
+  --row-hover: #35363b;
+  --track: #3a3b40;
+  --selection: color-mix(in srgb, var(--primary) 28%, transparent);
+  --border: #3a3b40;
+  --text: #f0f1f5;
+  --muted: #9a9baa;
+  --primary: #3d9eff;
+  --danger: #f06278;
+  --success: #1fd18a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-row: var(--row);
+  --color-row-hover: var(--row-hover);
+  --color-track: var(--track);
+  --color-selection: var(--selection);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --font-sans: var(--font-figtree), var(--font-plex-arabic), Figtree, "IBM Plex Sans Arabic",
+    system-ui, sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-figtree), var(--font-plex-arabic), Figtree, "IBM Plex Sans Arabic",
+    system-ui, sans-serif;
+}

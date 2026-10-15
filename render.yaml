@@ -1,0 +1,55 @@
+# Delete this block and set DATABASE_URL by hand to reuse an existing Render Postgres (tables are prefixed monitor_).
+databases:
+  - name: monitor-db
+    databaseName: monitor
+    postgresMajorVersion: "16"
+    # Placeholder. Pick the plan in the Render dashboard before creating it.
+    plan: basic-256mb
+
+services:
+  - type: web
+    name: monitor
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --include=dev && npm run build
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /api/health
+    # Presence lives in this process. A second instance would not see those
+    # sockets unless a Socket.IO adapter is added, which this app does not have.
+    numInstances: 1
+    envVars:
+      - key: DATABASE_URL
+        # Default: the internal URL of the blueprint database above.
+        # Manual alternative: delete the databases block and this fromDatabase
+        # entry, then set DATABASE_URL to the existing database's Internal URL
+        # in the same region as this web service.
+        fromDatabase:
+          name: monitor-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "false"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: APP_URL
+        sync: false
+      - key: NODE_VERSION
+        value: "20"
+      - key: CRON_SECRET
+        generateValue: true
+
+  - type: cron
+    name: monitor-due-reminders
+    runtime: node
+    schedule: "0 6 * * *"
+    buildCommand: npm ci --include=dev
+    startCommand: npm run due-reminders
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: monitor-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "false"
+      - key: NODE_VERSION
+        value: "20"
