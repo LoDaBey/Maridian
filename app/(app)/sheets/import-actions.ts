@@ -14,6 +14,8 @@ import { applyOp, type ApplyResult } from "@/lib/sheets/apply-op";
 import { IMPORT_CHUNK_SIZE, type ImportPerson, type ImportRowsResult } from "@/lib/sheets/csv";
 import { COLUMN_TYPES } from "@/lib/sheets/ops";
 import { createWorkbookFromImport } from "@/lib/sheets/sheets-repo";
+import { getSheetAccess } from "@/lib/sheets/workbook-access";
+import { getWorkspace } from "@/lib/workspaces/repo";
 
 const columnSchema = z.object({
   columnId: z.uuid(),
@@ -50,6 +52,7 @@ const inputSchema = z
   .object({
     mode: z.enum(["append", "new"]),
     sheetId: z.uuid().optional(),
+    workspaceId: z.uuid().optional(),
     name: z.string().trim().min(1, "Enter a sheet name.").max(100, "Use 100 characters or fewer.").optional(),
     newColumns: z.array(columnSchema).max(50).default([]),
     statusUpdates: z
@@ -114,6 +117,12 @@ export async function importRows(input: unknown): Promise<ImportRowsResult> {
     if (!can(user.role, "sheet.create")) {
       return failure("You don't have permission to do that.", null, data.skippedCells, data.unmatchedPeople);
     }
+    // A new sheet goes into the chosen workspace, or the one the import started from.
+    const workspaceId =
+      data.workspaceId ?? (data.sheetId ? (await getSheetAccess(user, data.sheetId))?.workspaceId : undefined);
+    if (!workspaceId || !(await getWorkspace(user, workspaceId))) {
+      return failure("Choose a workspace you belong to.", null, data.skippedCells, data.unmatchedPeople);
+    }
     const sourceTabs =
       data.tabs && data.tabs.length > 0
         ? data.tabs
@@ -130,6 +139,7 @@ export async function importRows(input: unknown): Promise<ImportRowsResult> {
     try {
       const created = await createWorkbookFromImport({
         actorId: user.id,
+        workspaceId,
         name: data.name ?? "",
         tabs: sourceTabs.map((tab, index) => {
           const settingsByColumn = new Map(tab.newColumns.map((column) => [column.columnId, column.settings]));

@@ -18,7 +18,7 @@ import type {
 } from "@/lib/db-types";
 import { WORKBOOK_PURGE_DAYS } from "@/lib/db-types";
 import { loadWorkbookPreviews } from "@/lib/sheets/workbook-preview";
-import { addWorkbookMember } from "@/lib/sheets/workbook-access";
+import { addWorkbookMember, visibleTabSql, visibleWorkbooksSql } from "@/lib/sheets/workbook-access";
 import {
   columnsForTemplate,
   directionForTemplate,
@@ -43,6 +43,10 @@ export interface SheetSummary {
   position: string;
   direction: SheetDirection;
   archivedAt: string | null;
+  /** Shown only to some people. */
+  hidden?: boolean;
+  /** The whole tab is protected. */
+  locked?: boolean;
 }
 
 export interface SavedTemplateSummary {
@@ -69,6 +73,8 @@ interface SheetRow {
   direction: SheetDirection;
   version: string | number;
   archived_at: Date | null;
+  hidden?: boolean;
+  locked?: boolean;
 }
 
 interface WorkbookRow {
@@ -84,7 +90,8 @@ const SHEET_ORDER_LOCK = 714206;
 const WORKBOOK_ORDER_LOCK = 714207;
 
 const SHEET_SELECT = `s.id, s.workbook_id, w.name AS workbook_name, s.name, s.position,
-       s.direction, s.version, s.archived_at`;
+       s.direction, s.version, s.archived_at, (s.visible_to IS NOT NULL) AS hidden,
+       EXISTS (SELECT 1 FROM monitor_protections p WHERE p.sheet_id = s.id AND p.scope = 'tab') AS locked`;
 
 function mapSheet(row: SheetRow): SheetSummary {
   return {
@@ -95,6 +102,8 @@ function mapSheet(row: SheetRow): SheetSummary {
     position: row.position,
     direction: row.direction,
     archivedAt: row.archived_at ? row.archived_at.toISOString() : null,
+    hidden: row.hidden ?? false,
+    locked: row.locked ?? false,
   };
 }
 
@@ -319,13 +328,15 @@ async function insertEmptyRows(
   }
 }
 
-export async function listActiveSheets(): Promise<SheetSummary[]> {
+export async function listActiveSheets(viewer: { id: string; role: Role }): Promise<SheetSummary[]> {
   const rows = await query<SheetRow>(
     `SELECT ${SHEET_SELECT}
      FROM monitor_sheets s
      JOIN monitor_workbooks w ON w.id = s.workbook_id
      WHERE s.archived_at IS NULL AND w.archived_at IS NULL AND w.deleted_at IS NULL
+       AND ${visibleWorkbooksSql(viewer)} AND ${visibleTabSql(viewer)}
      ORDER BY s.position`,
+    [viewer.id],
   );
   return rows.map(mapSheet);
 }
@@ -345,94 +356,76 @@ export async function listTabs(workbookId: string): Promise<SheetSummary[]> {
   return rows.map(mapSheet);
 }
 
-export async function listArchivedSheets(workbookId?: string): Promise<SheetSummary[]> {
-  if (workbookId && !isUuid(workbookId)) {
-    return [];
-  }
-  const rows = workbookId
-    ? await query<SheetRow>(
-        `SELECT ${SHEET_SELECT}
-         FROM monitor_sheets s
-         JOIN monitor_workbooks w ON w.id = s.workbook_id
-         WHERE s.workbook_id = $1 AND s.archived_at IS NOT NULL AND w.deleted_at IS NULL
-         ORDER BY s.archived_at DESC`,
-        [workbookId],
-      )
-    : await query<SheetRow>(
-        `SELECT ${SHEET_SELECT}
-         FROM monitor_sheets s
-         JOIN monitor_workbooks w ON w.id = s.workbook_id
-         WHERE s.archived_at IS NOT NULL AND w.deleted_at IS NULL
-         ORDER BY s.archived_at DESC`,
-      );
+export async function listArchivedSheets(viewer: { id: string; role: Role }): Promise<SheetSummary[]> {
+  const rows = await query<SheetRow>(
+    `SELECT ${SHEET_SELECT}
+     FROM monitor_sheets s
+     JOIN monitor_workbooks w ON w.id = s.workbook_id
+     WHERE s.archived_at IS NOT NULL AND w.deleted_at IS NULL
+       AND ${visibleWorkbooksSql(viewer)} AND ${visibleTabSql(viewer)}
+     ORDER BY s.archived_at DESC`,
+    [viewer.id],
+  );
   return rows.map(mapSheet);
 }
 
-export async function listWorkbooks(viewer: { id: string; role: Role }): Promise<WorkbookSummary[]> {
-  const seeAll = can(viewer.role, "sheet.view_all");
+/** The first tab is the first one this viewer can see (`$1` = viewer id). */
+function workbookSelect(viewer: { id: string; role: Role }): string {
+  return `SELECT w.id, w.name, w.position, w.archived_at, w.created_by,
+         (
+           SELECT s.id
+           FROM monitor_sheets s
+           WHERE s.workbook_id = w.id AND s.archived_at IS NULL AND ${visibleTabSql(viewer)}
+           ORDER BY s.position
+           LIMIT 1
+         ) AS first_tab_id
+  FROM monitor_workbooks w`;
+}
+
+/** Sheets in one workspace that the viewer can open. */
+export async function listWorkbooks(
+  viewer: { id: string; role: Role },
+  workspaceId: string,
+): Promise<WorkbookSummary[]> {
+  if (!isUuid(workspaceId)) {
+    return [];
+  }
   const rows = await query<WorkbookRow>(
-    seeAll
-      ? `SELECT w.id, w.name, w.position, w.archived_at, w.created_by,
-              (
-                SELECT s.id
-                FROM monitor_sheets s
-                WHERE s.workbook_id = w.id AND s.archived_at IS NULL
-                ORDER BY s.position
-                LIMIT 1
-              ) AS first_tab_id
-       FROM monitor_workbooks w
-       WHERE w.archived_at IS NULL AND w.deleted_at IS NULL
-       ORDER BY w.position`
-      : `SELECT w.id, w.name, w.position, w.archived_at, w.created_by,
-              (
-                SELECT s.id
-                FROM monitor_sheets s
-                WHERE s.workbook_id = w.id AND s.archived_at IS NULL
-                ORDER BY s.position
-                LIMIT 1
-              ) AS first_tab_id
-       FROM monitor_workbooks w
-       JOIN monitor_workbook_members m ON m.workbook_id = w.id AND m.user_id = $1
-       WHERE w.archived_at IS NULL AND w.deleted_at IS NULL
-       ORDER BY w.position`,
-    seeAll ? [] : [viewer.id],
+    `${workbookSelect(viewer)}
+     WHERE w.workspace_id = $2 AND w.archived_at IS NULL AND w.deleted_at IS NULL
+       AND ${visibleWorkbooksSql(viewer)}
+     ORDER BY w.position`,
+    [viewer.id, workspaceId],
   );
   const workbooks = rows.map(mapWorkbook);
-  const previews = await loadWorkbookPreviews(workbooks.map((workbook) => workbook.id));
+  const previews = await loadWorkbookPreviews(workbooks.map((workbook) => workbook.id), viewer);
   return workbooks.map((workbook) => ({
     ...workbook,
     preview: previews.get(workbook.id) ?? { direction: "ltr", columns: [], rows: [] },
   }));
 }
 
-export async function listArchivedWorkbooks(viewer: { id: string; role: Role }): Promise<WorkbookSummary[]> {
-  const seeAll = can(viewer.role, "sheet.view_all");
+export async function listArchivedWorkbooks(
+  viewer: { id: string; role: Role },
+  workspaceId: string,
+): Promise<WorkbookSummary[]> {
+  if (!isUuid(workspaceId)) {
+    return [];
+  }
   const rows = await query<WorkbookRow>(
-    seeAll
-      ? `SELECT w.id, w.name, w.position, w.archived_at, w.created_by,
-              (
-                SELECT s.id
-                FROM monitor_sheets s
-                WHERE s.workbook_id = w.id
-                ORDER BY s.position
-                LIMIT 1
-              ) AS first_tab_id
-       FROM monitor_workbooks w
-       WHERE w.archived_at IS NOT NULL AND w.deleted_at IS NULL
-       ORDER BY w.archived_at DESC`
-      : `SELECT w.id, w.name, w.position, w.archived_at, w.created_by,
-              (
-                SELECT s.id
-                FROM monitor_sheets s
-                WHERE s.workbook_id = w.id
-                ORDER BY s.position
-                LIMIT 1
-              ) AS first_tab_id
-       FROM monitor_workbooks w
-       JOIN monitor_workbook_members m ON m.workbook_id = w.id AND m.user_id = $1
-       WHERE w.archived_at IS NOT NULL AND w.deleted_at IS NULL
-       ORDER BY w.archived_at DESC`,
-    seeAll ? [] : [viewer.id],
+    `SELECT w.id, w.name, w.position, w.archived_at, w.created_by,
+            (
+              SELECT s.id
+              FROM monitor_sheets s
+              WHERE s.workbook_id = w.id AND ${visibleTabSql(viewer)}
+              ORDER BY s.position
+              LIMIT 1
+            ) AS first_tab_id
+     FROM monitor_workbooks w
+     WHERE w.workspace_id = $2 AND w.archived_at IS NOT NULL AND w.deleted_at IS NULL
+       AND ${visibleWorkbooksSql(viewer)}
+     ORDER BY w.archived_at DESC`,
+    [viewer.id, workspaceId],
   );
   return rows.map(mapWorkbook);
 }
@@ -573,6 +566,7 @@ export async function getSheet(id: string): Promise<SheetSummary | null> {
 
 export async function createWorkbookFromImport(input: {
   actorId: string;
+  workspaceId: string;
   name: string;
   tabs: ImportWorkbookTabDraft[];
 }): Promise<{ id: string; tabs: Array<{ sheetId: string; name: string }> }> {
@@ -585,14 +579,15 @@ export async function createWorkbookFromImport(input: {
     const workbookId = randomUUID();
     const position = await nextWorkbookPosition(client);
     await client.query(
-      `INSERT INTO monitor_workbooks (id, name, position, created_by)
-       VALUES ($1, $2, $3, $4)`,
-      [workbookId, input.name, position, input.actorId],
+      `INSERT INTO monitor_workbooks (id, name, position, created_by, workspace_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [workbookId, input.name, position, input.actorId, input.workspaceId],
     );
     await addWorkbookMember(client, {
       workbookId,
       userId: input.actorId,
       addedBy: input.actorId,
+      role: "owner",
     });
     const createdTabs: Array<{ sheetId: string; name: string }> = [];
     let firstId: string | null = null;
@@ -663,6 +658,7 @@ export async function createWorkbookFromImport(input: {
 
 export async function createWorkbookRecord(input: {
   actorId: string;
+  workspaceId: string;
   name: string;
   template: SheetTemplateId;
 }): Promise<{ id: string }> {
@@ -672,14 +668,15 @@ export async function createWorkbookRecord(input: {
     const workbookId = randomUUID();
     const position = await nextWorkbookPosition(client);
     await client.query(
-      `INSERT INTO monitor_workbooks (id, name, position, created_by)
-       VALUES ($1, $2, $3, $4)`,
-      [workbookId, input.name, position, input.actorId],
+      `INSERT INTO monitor_workbooks (id, name, position, created_by, workspace_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [workbookId, input.name, position, input.actorId, input.workspaceId],
     );
     await addWorkbookMember(client, {
       workbookId,
       userId: input.actorId,
       addedBy: input.actorId,
+      role: "owner",
     });
     const id = await insertTab(client, {
       workbookId,
@@ -827,6 +824,7 @@ export async function saveWorkbookAsTemplate(input: {
 
 export async function createWorkbookFromSavedTemplate(input: {
   actorId: string;
+  workspaceId: string;
   name: string;
   templateId: string;
 }): Promise<{ id: string }> {
@@ -849,14 +847,15 @@ export async function createWorkbookFromSavedTemplate(input: {
     const workbookId = randomUUID();
     const position = await nextWorkbookPosition(client);
     await client.query(
-      `INSERT INTO monitor_workbooks (id, name, position, created_by)
-       VALUES ($1, $2, $3, $4)`,
-      [workbookId, input.name, position, input.actorId],
+      `INSERT INTO monitor_workbooks (id, name, position, created_by, workspace_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [workbookId, input.name, position, input.actorId, input.workspaceId],
     );
     await addWorkbookMember(client, {
       workbookId,
       userId: input.actorId,
       addedBy: input.actorId,
+      role: "owner",
     });
     let firstId: string | null = null;
     for (const tab of tabs) {

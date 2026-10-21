@@ -4,7 +4,7 @@ import type { SessionUser } from "@/lib/auth/session";
 import { can } from "@/lib/rbac";
 import { applyOp, type ApplyResult } from "@/lib/sheets/apply-op";
 import { loadSnapshot } from "@/lib/sheets/snapshot";
-import { userCanAccessSheet } from "@/lib/sheets/workbook-access";
+import { getSheetAccess, loadProtections, locksFor, userCanAccessSheet } from "@/lib/sheets/workbook-access";
 import {
   joinSheetPresence,
   leaveSheetPresence,
@@ -84,6 +84,28 @@ export function registerSheetHandlers(socket: Socket): void {
         others: joined.others,
       });
       return { ok: true, snapshot, presence: joined.others };
+    });
+  });
+
+  // What this person can't edit on a tab, plus the full lock list for people who manage it.
+  socket.on("sheet:protection", (payload: unknown, ack?: unknown) => {
+    void handle(ack, async () => {
+      const parsed = joinSchema.safeParse(payload);
+      const user = currentUser(socket);
+      if (!parsed.success || !user) {
+        return { ok: false, code: "invalid", message: "Sheet not found." };
+      }
+      const access = await getSheetAccess(user, parsed.data.sheetId);
+      if (!access) {
+        return { ok: false, code: "forbidden", message: "You don't have access to this sheet." };
+      }
+      const protections = await loadProtections(parsed.data.sheetId);
+      return {
+        ok: true,
+        locks: locksFor(access, user.id, protections),
+        canManage: access.canManage,
+        protections: access.canManage ? protections : [],
+      } as unknown as SheetAck;
     });
   });
 

@@ -38,6 +38,7 @@ function buildChoices(
 export function useSheetImport({
   active,
   sheetId = "",
+  workspaceId,
   sheetName,
   columns,
   createOnly = false,
@@ -45,6 +46,7 @@ export function useSheetImport({
 }: {
   active: boolean;
   sheetId?: string;
+  workspaceId?: string;
   sheetName: string;
   columns: SheetColumnRef[];
   createOnly?: boolean;
@@ -236,6 +238,8 @@ export function useSheetImport({
         setProgress(`Creating workbook with ${prepared.length} tab${prepared.length === 1 ? "" : "s"}`);
         const created = await importRows({
           mode: "new",
+          workspaceId,
+          sheetId: sheetId || undefined,
           name: newName.trim(),
           tabs: prepared.map((tab) => ({
             name: tab.name,

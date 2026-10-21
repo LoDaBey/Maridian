@@ -37,6 +37,8 @@ function nameFromTemplate(templateName: string, workbooks: WorkbookSummary[]): s
 }
 
 export function SheetHome({
+  workspaceId,
+  openNew = false,
   workbooks,
   archived,
   savedTemplates,
@@ -45,6 +47,8 @@ export function SheetHome({
   currentUserId,
   role,
 }: {
+  workspaceId: string;
+  openNew?: boolean;
   workbooks: WorkbookSummary[];
   archived: WorkbookSummary[];
   savedTemplates: SavedTemplateSummary[];
@@ -53,7 +57,7 @@ export function SheetHome({
   currentUserId: string;
   role: Role;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(openNew && canCreate);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [saving, setSaving] = useState<WorkbookSummary | null>(null);
   const [deleting, setDeleting] = useState<WorkbookSummary | null>(null);
@@ -66,6 +70,7 @@ export function SheetHome({
     return (
       <>
         <EmptyState
+          workspaceId={workspaceId}
           canCreate={canCreate}
           suggestedName={nextName}
           savedTemplates={savedTemplates}
@@ -147,6 +152,7 @@ export function SheetHome({
           <ul className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {savedTemplates.map((template) => (
               <TemplateCard
+                workspaceId={workspaceId}
                 key={template.id}
                 template={template}
                 suggestedName={nameFromTemplate(template.name, workbooks)}
@@ -159,6 +165,7 @@ export function SheetHome({
         </section>
       ) : null}
       <NewSheetDialog
+        workspaceId={workspaceId}
         key={open ? nextName : "closed"}
         open={open}
         suggestedName={nextName}

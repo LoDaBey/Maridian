@@ -3,11 +3,20 @@
 import { useEffect, useState } from "react";
 import {
   getWorkbookShareState,
+  setWorkbookMemberAccess,
   shareWorkbook,
   unshareWorkbook,
+  type ShareCandidate,
 } from "@/app/(app)/sheets/actions";
-import type { DirectoryUser, WorkbookMember } from "@/lib/db-types";
-import { ROLE_LABEL } from "@/lib/rbac";
+import type { WorkbookMember } from "@/lib/db-types";
+
+type Access = "editor" | "viewer";
+
+const ACCESS_LABEL: Record<WorkbookMember["boardRole"], string> = {
+  owner: "Owner",
+  editor: "Can edit",
+  viewer: "Can view",
+};
 
 export function ShareWorkbookDialog({
   open,
@@ -25,7 +34,9 @@ export function ShareWorkbookDialog({
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [members, setMembers] = useState<WorkbookMember[]>([]);
-  const [users, setUsers] = useState<DirectoryUser[]>([]);
+  const [users, setUsers] = useState<ShareCandidate[]>([]);
+  const [newAccess, setNewAccess] = useState<Access>("editor");
+  const [workspaceName, setWorkspaceName] = useState("");
   const [canShare, setCanShare] = useState(false);
   const [title, setTitle] = useState(workbookName);
 
@@ -65,6 +76,7 @@ export function ShareWorkbookDialog({
       setUsers(state.users);
       setCanShare(state.canShare);
       setTitle(state.workbookName || workbookName);
+      setWorkspaceName(state.workspaceName);
     });
     return () => {
       cancelled = true;
@@ -97,7 +109,7 @@ export function ShareWorkbookDialog({
     setPending(true);
     setError("");
     try {
-      const result = await shareWorkbook({ workbookId, userIds: [userId] });
+      const result = await shareWorkbook({ workbookId, userIds: [userId], role: newAccess });
       if (result.error) {
         setError(result.error);
         return;
@@ -110,6 +122,26 @@ export function ShareWorkbookDialog({
       setMembers(state.members);
       setUsers(state.users);
       setQuery("");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function changeAccess(userId: string, role: Access) {
+    if (!canShare || pending) {
+      return;
+    }
+    setPending(true);
+    setError("");
+    try {
+      const result = await setWorkbookMemberAccess({ workbookId, userId, role });
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setMembers((current) =>
+        current.map((member) => (member.userId === userId ? { ...member, boardRole: role } : member)),
+      );
     } finally {
       setPending(false);
     }
@@ -145,8 +177,8 @@ export function ShareWorkbookDialog({
         </h2>
         <p className="mt-1 text-muted">
           {canShare
-            ? "People you share with can open this sheet."
-            : "You can see who has access. Ask an owner or team leader to share."}
+            ? `Share with members of ${workspaceName || "this workspace"}. Viewers can open the sheet but can't edit it.`
+            : "You can see who has access. Ask the sheet owner or a workspace admin to share."}
         </p>
         {canShare ? (
           <input
@@ -185,9 +217,23 @@ export function ShareWorkbookDialog({
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{member.fullName}</span>
                       <span className="block truncate text-[11px] text-muted">
-                        {member.isOwner ? "Owner" : ROLE_LABEL[member.role]}
+                        {member.email}
                       </span>
                     </span>
+                    {canShare && !member.isOwner ? (
+                      <select
+                        aria-label={`Access for ${member.fullName}`}
+                        value={member.boardRole}
+                        disabled={pending}
+                        className="cursor-pointer rounded border border-border bg-surface px-1.5 py-1 text-xs outline-none"
+                        onChange={(event) => void changeAccess(member.userId, event.target.value as Access)}
+                      >
+                        <option value="editor">Can edit</option>
+                        <option value="viewer">Can view</option>
+                      </select>
+                    ) : (
+                      <span className="text-xs text-muted">{ACCESS_LABEL[member.boardRole]}</span>
+                    )}
                     {canShare && !member.isOwner ? (
                       <button
                         type="button"
@@ -204,12 +250,23 @@ export function ShareWorkbookDialog({
               </ul>
               {canShare ? (
                 <>
-                  <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
-                    Add people
-                  </p>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted">Add people</p>
+                    <select
+                      aria-label="Access for new people"
+                      value={newAccess}
+                      className="cursor-pointer rounded border border-border bg-surface px-1.5 py-1 text-xs outline-none"
+                      onChange={(event) => setNewAccess(event.target.value as Access)}
+                    >
+                      <option value="editor">Can edit</option>
+                      <option value="viewer">Can view</option>
+                    </select>
+                  </div>
                   {candidates.length === 0 ? (
                     <p className="px-1 py-2 text-muted">
-                      {needle ? "No people match." : "Everyone available is already shared."}
+                      {needle
+                        ? "No people match."
+                        : "Everyone in this workspace already has access. Invite more people to the workspace first."}
                     </p>
                   ) : (
                     <ul className="space-y-1">

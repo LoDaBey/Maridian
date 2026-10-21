@@ -1,4 +1,6 @@
 import type { ColumnType, SheetDirection, SheetPreview, SheetPreviewCell } from "@/lib/db-types";
+import { visibleTabSql } from "@/lib/sheets/workbook-access";
+import type { Role } from "@/lib/rbac";
 import { query } from "@/lib/db";
 import { asStringList, PRIORITY_OPTIONS } from "@/lib/sheets/column-meta";
 import { countryByCode, countryName, findCountry } from "@/lib/sheets/countries";
@@ -247,7 +249,10 @@ function previewFor(sheet: SheetHead, groups: GroupHead[], columns: ColumnHead[]
   };
 }
 
-export async function loadWorkbookPreviews(workbookIds: string[]): Promise<Map<string, SheetPreview>> {
+export async function loadWorkbookPreviews(
+  workbookIds: string[],
+  viewer: { id: string; role: Role },
+): Promise<Map<string, SheetPreview>> {
   const previews = new Map<string, SheetPreview>();
   if (workbookIds.length === 0) {
     return previews;
@@ -257,9 +262,9 @@ export async function loadWorkbookPreviews(workbookIds: string[]): Promise<Map<s
     `SELECT DISTINCT ON (s.workbook_id)
             s.workbook_id, s.id AS sheet_id, s.direction
      FROM monitor_sheets s
-     WHERE s.workbook_id = ANY($1::uuid[]) AND s.archived_at IS NULL
+     WHERE s.workbook_id = ANY($1::uuid[]) AND s.archived_at IS NULL AND ${visibleTabSql(viewer, "$2")}
      ORDER BY s.workbook_id, s.position`,
-    [workbookIds],
+    [workbookIds, viewer.id],
   );
   const sheetIds = sheets.map((sheet) => sheet.sheet_id);
   if (sheetIds.length === 0) {

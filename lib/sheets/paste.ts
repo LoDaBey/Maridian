@@ -57,6 +57,8 @@ export function textToCellValue(
     case "link":
     case "text":
     case "long_text":
+    case "email":
+    case "phone":
       return checked(column, text);
     default:
       return { ok: false };

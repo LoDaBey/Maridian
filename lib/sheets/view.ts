@@ -117,6 +117,8 @@ export function operatorsFor(type: ColumnType): FilterOperator[] {
     case "text":
     case "long_text":
     case "link":
+    case "email":
+    case "phone":
       return TEXT_OPERATORS;
     case "status":
     case "priority":

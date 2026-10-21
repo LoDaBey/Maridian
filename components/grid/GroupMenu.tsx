@@ -6,6 +6,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ColorPicker } from "./ColorPicker";
 
 export function GroupMenu({
+  onProtect,
+  isProtected = false,
   open,
   x,
   y,
@@ -29,6 +31,9 @@ export function GroupMenu({
   onRecolor: (color: string) => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  /** Shown to the sheet owner and workspace admins. */
+  onProtect?: () => void;
+  isProtected?: boolean;
 }) {
   const [colorsOpen, setColorsOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -51,6 +56,15 @@ export function GroupMenu({
             onDuplicate();
           }}
         />
+        {onProtect ? (
+          <MenuItem
+            label={isProtected ? "Protection…" : "Protect group…"}
+            onSelect={() => {
+              onClose();
+              onProtect();
+            }}
+          />
+        ) : null}
         <MenuItem
           label="Delete group"
           danger

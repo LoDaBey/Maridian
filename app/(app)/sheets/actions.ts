@@ -5,7 +5,10 @@ import { z } from "zod";
 import { requirePermission, requireUser } from "@/lib/auth/current-user";
 import type { DirectoryUser, WorkbookMember } from "@/lib/db-types";
 import { query } from "@/lib/db";
-import { canShareWorkbook } from "@/lib/rbac";
+import { tx } from "@/lib/db";
+import { insertNotifications } from "@/lib/notifications/repo";
+import { emitToUser } from "@/lib/realtime/emit";
+import { getWorkspace } from "@/lib/workspaces/repo";
 import { broadcastSheetMeta, broadcastSheetsChanged } from "@/lib/realtime/socket-server";
 import {
   archiveSheetRecord,
@@ -27,7 +30,10 @@ import {
 } from "@/lib/sheets/sheets-repo";
 import { SHEET_TEMPLATES, type SheetTemplateId } from "@/lib/sheets/templates";
 import {
+  getWorkbookAccess,
+  listSheetIdsForWorkbooks,
   listWorkbookMembers,
+  setWorkbookMemberRole,
   shareWorkbookWithUsers,
   unshareWorkbookUser,
   userCanAccessSheet,
@@ -46,6 +52,7 @@ const nameSchema = z.string().trim().min(1, "Enter a sheet name.").max(100, "Use
 
 const createSchema = z
   .object({
+    workspaceId: z.uuid("Choose a workspace."),
     name: nameSchema,
     template: z.enum(SHEET_TEMPLATES).optional(),
     savedTemplateId: z.uuid("Template not found.").optional(),
@@ -146,6 +153,7 @@ async function publishMeta(id: string): Promise<void> {
 }
 
 export async function createSheet(input: {
+  workspaceId: string;
   name: string;
   template?: SheetTemplateId;
   savedTemplateId?: string;
@@ -155,16 +163,21 @@ export async function createSheet(input: {
   if (!parsed.success) {
     return { error: fieldError(parsed.error), id: null };
   }
+  if (!(await getWorkspace(actor, parsed.data.workspaceId))) {
+    return { error: "You aren't a member of this workspace.", id: null };
+  }
 
   try {
     const created = parsed.data.savedTemplateId
       ? await createWorkbookFromSavedTemplate({
           actorId: actor.id,
+          workspaceId: parsed.data.workspaceId,
           name: parsed.data.name,
           templateId: parsed.data.savedTemplateId,
         })
       : await createWorkbookRecord({
           actorId: actor.id,
+          workspaceId: parsed.data.workspaceId,
           name: parsed.data.name,
           template: parsed.data.template ?? "blank",
         });
@@ -419,80 +432,176 @@ export async function purgeWorkbook(input: { id: string }): Promise<SheetMutatio
   }
 }
 
+const boardRoleSchema = z.enum(["editor", "viewer"]);
+
 const shareSchema = z.object({
   workbookId: z.uuid("Sheet not found."),
-  userIds: z.array(z.uuid("Choose a person.")).max(100),
+  userIds: z.array(z.uuid("Choose a person.")).min(1, "Choose a person.").max(100),
+  role: boardRoleSchema.default("editor"),
 });
 
-const unshareSchema = z.object({
+const memberSchema = z.object({
   workbookId: z.uuid("Sheet not found."),
   userId: z.uuid("Choose a person."),
 });
 
+const memberRoleSchema = memberSchema.extend({ role: boardRoleSchema });
+
+export interface ShareCandidate {
+  id: string;
+  fullName: string;
+  email: string;
+  avatarColor: string;
+}
+
+/** Who is on a sheet, and which workspace members could still be added. */
 export async function getWorkbookShareState(input: { workbookId: string }): Promise<{
   error: string;
   members: WorkbookMember[];
-  users: DirectoryUser[];
+  users: ShareCandidate[];
   canShare: boolean;
   workbookName: string;
+  workspaceName: string;
 }> {
+  const empty = { members: [], users: [], canShare: false, workbookName: "", workspaceName: "" };
   const actor = await requireUser();
   const parsed = z.object({ workbookId: z.uuid("Sheet not found.") }).safeParse(input);
   if (!parsed.success) {
-    return { error: fieldError(parsed.error), members: [], users: [], canShare: false, workbookName: "" };
+    return { error: fieldError(parsed.error), ...empty };
   }
-  if (!(await userCanAccessWorkbook(actor, parsed.data.workbookId))) {
-    return { error: "You don't have access to this sheet.", members: [], users: [], canShare: false, workbookName: "" };
+  const access = await getWorkbookAccess(actor, parsed.data.workbookId);
+  if (!access) {
+    return { error: "You don't have access to this sheet.", ...empty };
   }
-  const workbooks = await query<{ name: string; created_by: string | null }>(
-    `SELECT name, created_by FROM monitor_workbooks WHERE id = $1 AND deleted_at IS NULL`,
-    [parsed.data.workbookId],
-  );
-  const workbook = workbooks[0];
-  if (!workbook) {
-    return { error: "Sheet not found.", members: [], users: [], canShare: false, workbookName: "" };
-  }
-  const [members, users] = await Promise.all([
+  const [meta, members, candidates] = await Promise.all([
+    query<{ name: string; workspace_name: string }>(
+      `SELECT w.name, ws.name AS workspace_name
+       FROM monitor_workbooks w JOIN monitor_workspaces ws ON ws.id = w.workspace_id
+       WHERE w.id = $1`,
+      [parsed.data.workbookId],
+    ),
     listWorkbookMembers(parsed.data.workbookId),
-    listDirectoryUsers(),
+    query<{ id: string; full_name: string; email: string; avatar_color: string }>(
+      `SELECT u.id, u.full_name, u.email, u.avatar_color
+       FROM monitor_workspace_members wm
+       JOIN monitor_users u ON u.id = wm.user_id
+       WHERE wm.workspace_id = $1 AND u.is_active = true
+         AND NOT EXISTS (
+           SELECT 1 FROM monitor_workbook_members bm WHERE bm.workbook_id = $2 AND bm.user_id = u.id
+         )
+       ORDER BY u.full_name`,
+      [access.workspaceId, parsed.data.workbookId],
+    ),
   ]);
   return {
     error: "",
     members,
-    users: users.filter((user) => user.isActive),
-    canShare: canShareWorkbook(actor, { createdBy: workbook.created_by }),
-    workbookName: workbook.name,
+    users: candidates.map((row) => ({
+      id: row.id,
+      fullName: row.full_name,
+      email: row.email,
+      avatarColor: row.avatar_color,
+    })),
+    canShare: access.canShare,
+    workbookName: meta[0]?.name ?? "",
+    workspaceName: meta[0]?.workspace_name ?? "",
   };
+}
+
+async function requireShareAccess(
+  actor: { id: string; role: import("@/lib/rbac").Role },
+  workbookId: string,
+): Promise<string | null> {
+  const access = await getWorkbookAccess(actor, workbookId);
+  if (!access) {
+    return "You don't have access to this sheet.";
+  }
+  if (!access.canShare) {
+    return "Only the sheet owner or a workspace admin can manage who has access.";
+  }
+  return null;
+}
+
+/** Sheet ids are sent so an open grid can close itself when access goes away. */
+async function notifyAccessChanged(userId: string, workbookId: string, revoked: boolean): Promise<void> {
+  const sheetIds = revoked ? await listSheetIdsForWorkbooks([workbookId]) : [];
+  emitToUser(userId, revoked ? "access:revoked" : "access:changed", { workbookId, sheetIds });
 }
 
 export async function shareWorkbook(input: {
   workbookId: string;
   userIds: string[];
+  role?: "editor" | "viewer";
 }): Promise<{ error: string }> {
   const actor = await requireUser();
   const parsed = shareSchema.safeParse(input);
   if (!parsed.success) {
     return { error: fieldError(parsed.error) };
   }
-  if (!(await userCanAccessWorkbook(actor, parsed.data.workbookId))) {
-    return { error: "You don't have access to this sheet." };
+  const denied = await requireShareAccess(actor, parsed.data.workbookId);
+  if (denied) {
+    return { error: denied };
   }
-  const workbooks = await query<{ created_by: string | null }>(
-    `SELECT created_by FROM monitor_workbooks WHERE id = $1 AND deleted_at IS NULL`,
-    [parsed.data.workbookId],
-  );
-  const workbook = workbooks[0];
-  if (!workbook) {
-    return { error: "Sheet not found." };
-  }
-  if (!canShareWorkbook(actor, { createdBy: workbook.created_by })) {
-    return { error: "You don't have permission to share this sheet." };
-  }
-  await shareWorkbookWithUsers({
+  const added = await shareWorkbookWithUsers({
     actorId: actor.id,
     workbookId: parsed.data.workbookId,
     userIds: parsed.data.userIds,
+    role: parsed.data.role,
   });
+  if (added.length > 0) {
+    const firstTab = await query<{ id: string }>(
+      `SELECT id FROM monitor_sheets WHERE workbook_id = $1 AND archived_at IS NULL ORDER BY position LIMIT 1`,
+      [parsed.data.workbookId],
+    );
+    const sheetId = firstTab[0]?.id;
+    if (sheetId) {
+      const created = await tx((client) =>
+        insertNotifications(
+          client,
+          added.map((userId) => ({
+            userId,
+            type: "share" as const,
+            sheetId,
+            rowId: null,
+            actorId: actor.id,
+            payload: { role: parsed.data.role },
+          })),
+        ),
+      );
+      for (const notification of created) {
+        emitToUser(notification.userId, "notification:created", notification);
+      }
+    }
+    for (const userId of added) {
+      await notifyAccessChanged(userId, parsed.data.workbookId, false);
+    }
+  }
+  revalidatePath("/", "layout");
+  return { error: "" };
+}
+
+export async function setWorkbookMemberAccess(input: {
+  workbookId: string;
+  userId: string;
+  role: "editor" | "viewer";
+}): Promise<{ error: string }> {
+  const actor = await requireUser();
+  const parsed = memberRoleSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: fieldError(parsed.error) };
+  }
+  const denied = await requireShareAccess(actor, parsed.data.workbookId);
+  if (denied) {
+    return { error: denied };
+  }
+  const result = await setWorkbookMemberRole(parsed.data);
+  if (result === "owner") {
+    return { error: "The owner's access can't be changed." };
+  }
+  if (result === "missing") {
+    return { error: "That person isn't on this sheet." };
+  }
+  await notifyAccessChanged(parsed.data.userId, parsed.data.workbookId, false);
   revalidatePath("/", "layout");
   return { error: "" };
 }
@@ -502,23 +611,16 @@ export async function unshareWorkbook(input: {
   userId: string;
 }): Promise<{ error: string }> {
   const actor = await requireUser();
-  const parsed = unshareSchema.safeParse(input);
+  const parsed = memberSchema.safeParse(input);
   if (!parsed.success) {
     return { error: fieldError(parsed.error) };
   }
-  if (!(await userCanAccessWorkbook(actor, parsed.data.workbookId))) {
-    return { error: "You don't have access to this sheet." };
-  }
-  const workbooks = await query<{ created_by: string | null }>(
-    `SELECT created_by FROM monitor_workbooks WHERE id = $1 AND deleted_at IS NULL`,
-    [parsed.data.workbookId],
-  );
-  const workbook = workbooks[0];
-  if (!workbook) {
-    return { error: "Sheet not found." };
-  }
-  if (!canShareWorkbook(actor, { createdBy: workbook.created_by })) {
-    return { error: "You don't have permission to share this sheet." };
+  // Anyone may remove themselves from a sheet they don't own.
+  if (parsed.data.userId !== actor.id) {
+    const denied = await requireShareAccess(actor, parsed.data.workbookId);
+    if (denied) {
+      return { error: denied };
+    }
   }
   const result = await unshareWorkbookUser(parsed.data);
   if (result === "owner") {
@@ -527,6 +629,7 @@ export async function unshareWorkbook(input: {
   if (result === "missing") {
     return { error: "That person isn't on this sheet." };
   }
+  await notifyAccessChanged(parsed.data.userId, parsed.data.workbookId, true);
   revalidatePath("/", "layout");
   return { error: "" };
 }

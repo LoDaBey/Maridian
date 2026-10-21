@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { getSocket } from "@/lib/realtime/client";
 
 export function RealtimeProvider() {
   const router = useRouter();
+  const pathname = usePathname();
   const routerRef = useRef(router);
+  const pathRef = useRef(pathname);
 
   useEffect(() => {
     routerRef.current = router;
+    pathRef.current = pathname;
   });
 
   useEffect(() => {
@@ -25,13 +28,35 @@ export function RealtimeProvider() {
       window.location.assign("/login");
     };
 
+    // Access to a sheet or workspace was taken away: leave it if it's open.
+    const onAccessRevoked = (payload: { sheetIds?: string[]; workspaceId?: string }) => {
+      const path = pathRef.current;
+      const openSheet = path.match(/^\/s\/([^/]+)/)?.[1];
+      const openWorkspace = path.match(/^\/w\/([^/]+)/)?.[1];
+      const lost =
+        (openSheet && payload.sheetIds?.includes(openSheet)) ||
+        (openWorkspace && payload.workspaceId === openWorkspace);
+      if (lost) {
+        // A full load avoids a refresh racing the redirect on the page that's gone.
+        window.location.assign("/");
+        return;
+      }
+      routerRef.current.refresh();
+    };
+
     socket.on("sheets:changed", refresh);
     socket.on("user:updated", refresh);
+    socket.on("workspaces:changed", refresh);
+    socket.on("access:changed", refresh);
+    socket.on("access:revoked", onAccessRevoked);
     socket.on("session:revoked", onRevoked);
 
     return () => {
       socket.off("sheets:changed", refresh);
       socket.off("user:updated", refresh);
+      socket.off("workspaces:changed", refresh);
+      socket.off("access:changed", refresh);
+      socket.off("access:revoked", onAccessRevoked);
       socket.off("session:revoked", onRevoked);
     };
   }, []);

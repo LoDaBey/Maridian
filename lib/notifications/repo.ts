@@ -159,6 +159,9 @@ function excerptOf(type: NotificationType, payload: Record<string, unknown>): st
   if (type === "due") {
     return "has a due date coming up";
   }
+  if (type === "share") {
+    return "shared a sheet with you";
+  }
   return "changed a status";
 }
 

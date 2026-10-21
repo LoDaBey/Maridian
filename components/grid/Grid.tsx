@@ -7,9 +7,13 @@ import { columnSizingFeature, coreFeatures, useTable } from "@tanstack/react-tab
 import { generateKeyBetween, generateNKeysBetween } from "fractional-indexing";
 import { useStore } from "zustand";
 import { useSheetDispatch } from "@/lib/realtime/sheet-session";
-import { can, canDeleteRow } from "@/lib/rbac";
+import { canDeleteRow } from "@/lib/rbac";
 import { applyOpToState } from "@/lib/sheets/apply-local";
 import type { JsonValue, SheetOp } from "@/lib/sheets/ops";
+import { visibleRowIds } from "./board-views";
+import { useProtection } from "./ProtectionContext";
+import { ProtectDialog } from "./ProtectDialog";
+import { ChartView } from "./ChartView";
 import { KanbanBoard } from "./KanbanBoard";
 import { TimelineView } from "./TimelineView";
 import { Toolbar } from "./Toolbar";
@@ -36,7 +40,7 @@ import { compareSortedIds, deriveRowOrder, highlightSpans, mergePinnedRows, norm
 import { textToCellValue } from "@/lib/sheets/paste";
 import { displayValue } from "@/lib/sheets/values";
 import { parseTSV, toTSV } from "./clipboard";
-import { useMe } from "./MeContext";
+import { useMe, canDo } from "./MeContext";
 import { GridCell } from "./Cell";
 import { displayText } from "./renderers/CellValue";
 import { ADD_COLUMN_WIDTH, AddColumnButton } from "./AddColumnButton";
@@ -177,14 +181,27 @@ export function Grid({
     scrollRef.current = node;
     setScrollNode(node);
   }, []);
-  const readOnly = archived || !can(me.role, "cell.edit");
-  const canResize = can(me.role, "column.resize") && !archived;
-  const canManage = can(me.role, "column.manage") && !archived;
-  const canAddColumn = (canManage || can(me.role, "sheet.create")) && !archived;
-  const canDeleteColumn = can(me.role, "column.delete") && !archived;
-  const canReorder = can(me.role, "row.move") && !archived && !view.isTransformed;
+  const protection = useProtection();
+  const readOnly = archived || !canDo(me, "cell.edit") || protection.tabLocked;
+  /** Locked column, or a row in a locked group (rows without a group sit in the first one). */
+  const isCellLocked = (rowId: string, columnId: string): boolean => {
+    if (protection.lockedColumns.has(columnId)) {
+      return true;
+    }
+    const state = store.getState();
+    const group = state.rows[rowId]?.groupId ?? groups[0]?.id;
+    return group !== undefined && protection.lockedGroups.has(group);
+  };
+  const lockRef = useRef(isCellLocked);
+  lockRef.current = isCellLocked;
+  const [protectGroup, setProtectGroup] = useState<{ id: string; name: string } | null>(null);
+  const canResize = canDo(me, "column.resize") && !archived;
+  const canManage = canDo(me, "column.manage") && !archived;
+  const canAddColumn = (canManage || canDo(me, "sheet.create")) && !archived;
+  const canDeleteColumn = canDo(me, "column.delete") && !archived;
+  const canReorder = canDo(me, "row.move") && !archived && !view.isTransformed;
   const canRowMenu = !archived;
-  const canInsert = can(me.role, "row.insert") && !archived;
+  const canInsert = canDo(me, "row.insert") && !archived;
   const boardItemsRef = useRef(boardItems);
   boardItemsRef.current = boardItems;
   const bounds = selectionBounds(selection, rowIds, columnIds);
@@ -438,10 +455,18 @@ export function Grid({
   }, []);
 
   const onOpen = useCallback((rowId: string, columnId: string) => {
+    if (lockRef.current(rowId, columnId)) {
+      actions.current.onToast("This part of the sheet is protected.");
+      return;
+    }
     setEdit({ rowId, columnId, seed: null });
   }, []);
 
   const onToggle = useCallback((rowId: string, columnId: string) => {
+    if (lockRef.current(rowId, columnId)) {
+      actions.current.onToast("This part of the sheet is protected.");
+      return;
+    }
     const current = store.getState().rows[rowId]?.data[columnId];
     actions.current.record("cell.set", { rowId, columnId, value: current === true ? false : true });
   }, [store]);
@@ -480,6 +505,10 @@ export function Grid({
     }
     const column = store.getState().columns[selection.focus.columnId];
     if (!column || column.type === "checkbox") {
+      return;
+    }
+    if (isCellLocked(selection.focus.rowId, selection.focus.columnId)) {
+      onToast("This part of the sheet is protected.");
       return;
     }
     setEdit({ rowId: selection.focus.rowId, columnId: selection.focus.columnId, seed });
@@ -524,7 +553,7 @@ export function Grid({
     }
     if (selection?.kind === "row") {
       const allowed = selectedRowIds().filter((rowId) =>
-        canDeleteRow(me, { created_by: store.getState().rows[rowId]?.createdBy ?? null }),
+        !me.viewOnly && canDeleteRow(me, { created_by: store.getState().rows[rowId]?.createdBy ?? null }),
       );
       if (allowed.length === 0) {
         onToast("You can only delete rows you created.");
@@ -1064,7 +1093,9 @@ export function Grid({
 
   const banner = archived
     ? "This sheet is read-only because it is archived."
-    : !can(me.role, "cell.edit")
+    : protection.tabLocked
+      ? "This tab is protected. Only the people the owner chose can edit it."
+      : !canDo(me, "cell.edit")
       ? "You don't have permission to edit cells."
       : "";
 
@@ -1111,7 +1142,15 @@ export function Grid({
         exit={{ opacity: 0, y: -8 }}
         transition={{ duration: 0.2, ease: "easeOut" }}
       >
-      {layout === "kanban" ? (
+      {layout === "chart" ? (
+        <ChartView
+          sheetId={sheetId}
+          columns={columns}
+          rows={rows}
+          rowIds={visibleRowIds(groups, rowsByGroup)}
+          usersById={usersById}
+        />
+      ) : layout === "kanban" ? (
         <KanbanBoard
           direction={direction}
           groups={groups}
@@ -1259,7 +1298,7 @@ export function Grid({
                         }}
                         onResizeStart={(event) => startResize(column.id, widths[index] ?? column.width, event)}
                         canDelete={canDeleteColumn && columnIds.length > 1}
-                        canStyle={can(me.role, "cell.edit") && !archived}
+                        canStyle={canDo(me, "cell.edit") && !archived}
                         filterActive={view.filterActive}
                         filtered={view.filters.some((rule) => rule.columnId === column.id && rule.operator === "in_values")}
                         filters={view.filters}
@@ -1350,7 +1389,7 @@ export function Grid({
                       selectRow(rowId, extend);
                       focusGrid();
                     }}
-                    canDelete={canDeleteRow(me, { created_by: store.getState().rows[rowId]?.createdBy ?? null })}
+                    canDelete={!me.viewOnly && canDeleteRow(me, { created_by: store.getState().rows[rowId]?.createdBy ?? null })}
                     onDelete={() => deleteRows([rowId])}
                   />
                   {columns.map((column, index) => (
@@ -1416,6 +1455,15 @@ export function Grid({
       )}
       </motion.div>
       </AnimatePresence>
+      {protectGroup ? (
+        <ProtectDialog
+          sheetId={sheetId}
+          scope="group"
+          targetId={protectGroup.id}
+          targetName={protectGroup.name}
+          onClose={() => setProtectGroup(null)}
+        />
+      ) : null}
       <RowContextMenu
         menu={rowMenu}
         targets={rowMenu ? menuRowIds(rowMenu.rowId) : []}
@@ -1431,6 +1479,21 @@ export function Grid({
         name={groups.find((group) => group.id === groupMenu?.groupId)?.name ?? "Group"}
         color={groups.find((group) => group.id === groupMenu?.groupId)?.color ?? "#579bfc"}
         canDelete={groups.length > 1}
+        isProtected={Boolean(
+          groupMenu &&
+            (protection.lockedGroups.has(groupMenu.groupId) ||
+              protection.protections.some((item) => item.scope === "group" && item.targetId === groupMenu.groupId)),
+        )}
+        onProtect={
+          protection.canManage
+            ? () => {
+                const group = groups.find((item) => item.id === groupMenu?.groupId);
+                if (group) {
+                  setProtectGroup({ id: group.id, name: group.name });
+                }
+              }
+            : undefined
+        }
         onClose={() => setGroupMenu(null)}
         onRename={() => {
           const groupId = groupMenu?.groupId;

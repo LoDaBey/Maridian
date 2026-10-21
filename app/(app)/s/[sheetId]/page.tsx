@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth/current-user";
 import { getSheet } from "@/lib/sheets/sheets-repo";
-import { userCanAccessSheet } from "@/lib/sheets/workbook-access";
+import { getSheetAccess } from "@/lib/sheets/workbook-access";
 import { SheetClient } from "./_components/SheetClient";
 
 export const instant = false;
@@ -16,7 +16,8 @@ export default async function SheetPage({
   const user = await requireUser();
   const sheet = await getSheet(sheetId);
 
-  if (!sheet || sheet.archivedAt || !(await userCanAccessSheet(user, sheet.id))) {
+  const access = sheet && !sheet.archivedAt ? await getSheetAccess(user, sheet.id) : null;
+  if (!sheet || !access) {
     notFound();
   }
 
@@ -26,7 +27,7 @@ export default async function SheetPage({
         sheetId={sheet.id}
         workbookId={sheet.workbookId}
         workbookName={sheet.workbookName}
-        me={{ id: user.id, role: user.role }}
+        me={{ id: user.id, role: user.role, viewOnly: access.role === "viewer" }}
       />
     </Suspense>
   );

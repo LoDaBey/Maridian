@@ -2,6 +2,8 @@
 
 import type { DirectoryUser } from "../types";
 import type { LocalColumn, LocalRow } from "@/lib/sheets/apply-local";
+import { rowProgress } from "@/lib/sheets/progress";
+import { useColumns } from "@/stores/sheet-store";
 
 export function AutoCellValue({
   column,
@@ -12,6 +14,9 @@ export function AutoCellValue({
   row: LocalRow;
   users: DirectoryUser[];
 }) {
+  if (column.type === "progress") {
+    return <ProgressValue row={row} />;
+  }
   if (column.type === "item_id") {
     return <span className="block truncate px-2 text-center leading-10 text-muted">#{row.itemNumber || "—"}</span>;
   }
@@ -37,6 +42,30 @@ export function AutoCellValue({
     );
   }
   return null;
+}
+
+/** Share of the row's status columns that are done, as a thin Monday-style bar. */
+function ProgressValue({ row }: { row: LocalRow }) {
+  const columns = useColumns();
+  const progress = rowProgress(row.data, columns);
+  if (!progress) {
+    return (
+      <span className="block truncate px-2 text-center leading-10 text-muted" title="Add a status column with a Done label">
+        —
+      </span>
+    );
+  }
+  return (
+    <span
+      className="flex h-full w-full items-center gap-2 px-2"
+      title={`${progress.done} of ${progress.total} status columns done`}
+    >
+      <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-track">
+        <span className="block h-full rounded-full bg-success" style={{ width: `${progress.percent}%` }} />
+      </span>
+      <span className="w-9 shrink-0 text-end text-xs tabular-nums text-muted">{progress.percent}%</span>
+    </span>
+  );
 }
 
 function formatDateTime(value: string): string {

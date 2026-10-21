@@ -31,11 +31,13 @@ const IMPORT_STEPS: Array<{ id: NewSheetStep; label: string }> = [
 ];
 
 export function NewSheetDialog({
+  workspaceId,
   open,
   suggestedName,
   savedTemplates = [],
   onClose,
 }: {
+  workspaceId: string;
   open: boolean;
   suggestedName: string;
   savedTemplates?: SavedTemplateSummary[];
@@ -49,6 +51,7 @@ export function NewSheetDialog({
   const [pending, setPending] = useState(false);
   const importer = useSheetImport({
     active: open && choice === "import",
+    workspaceId,
     sheetName: name.trim(),
     columns: [],
     createOnly: true,
@@ -147,8 +150,8 @@ export function NewSheetDialog({
     setError("");
     try {
       const result = choice.startsWith("saved:")
-        ? await createSheet({ name: name.trim(), savedTemplateId: choice.slice("saved:".length) })
-        : await createSheet({ name: name.trim(), template: "blank" });
+        ? await createSheet({ workspaceId, name: name.trim(), savedTemplateId: choice.slice("saved:".length) })
+        : await createSheet({ workspaceId, name: name.trim(), template: "blank" });
       if (result.error || !result.id) {
         setError(result.error || "Could not create the sheet.");
         return;

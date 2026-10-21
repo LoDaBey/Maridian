@@ -1,5 +1,7 @@
 "use client";
 
+import { ProtectionProvider } from "@/components/grid/ProtectionContext";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -72,6 +74,7 @@ function SheetSessionView({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <ProtectionProvider sheetId={sheetId}>
       <Grid
         sheetId={sheetId}
         workbookId={workbookId}
@@ -91,6 +94,7 @@ function SheetSessionView({
           />
         ) : null}
       </AnimatePresence>
+      </ProtectionProvider>
       <SaveStatus />
       {toast ? (
         <p

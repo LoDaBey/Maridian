@@ -133,6 +133,10 @@ export function normalizeValue(column: ValueColumn, raw: unknown): NormalizeResu
       return normalizeText(raw);
     case "link":
       return normalizeLink(raw);
+    case "email":
+      return normalizeEmail(raw);
+    case "phone":
+      return normalizePhone(raw);
     case "date":
     case "due_date":
       return normalizeDate(raw);
@@ -161,10 +165,43 @@ export function normalizeValue(column: ValueColumn, raw: unknown): NormalizeResu
     case "created_at":
     case "updated_at":
     case "item_id":
+    case "progress":
       return { ok: false, error: "This column is automatic." };
     default:
       return { ok: false, error: "Unknown column type." };
   }
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+function normalizeEmail(raw: unknown): NormalizeResult {
+  if (typeof raw !== "string") {
+    return { ok: false, error: "Enter an email address." };
+  }
+  const value = raw.trim().replace(/^mailto:/i, "");
+  if (!value) {
+    return { ok: true, value: undefined };
+  }
+  if (value.length > 254 || !EMAIL_PATTERN.test(value)) {
+    return { ok: false, error: "Enter a valid email address, like name@company.com." };
+  }
+  return { ok: true, value: value.toLowerCase() };
+}
+
+/** Keeps the number as typed (spaces, dashes, +), but it must hold 6-20 digits. */
+function normalizePhone(raw: unknown): NormalizeResult {
+  if (typeof raw !== "string" && typeof raw !== "number") {
+    return { ok: false, error: "Enter a phone number." };
+  }
+  const value = String(raw).trim().replace(/^tel:/i, "");
+  if (!value) {
+    return { ok: true, value: undefined };
+  }
+  const digits = value.replace(/\D/g, "");
+  if (!/^\+?[\d\s().-]+$/.test(value) || digits.length < 6 || digits.length > 20) {
+    return { ok: false, error: "Enter a valid phone number, like +971 50 123 4567." };
+  }
+  return { ok: true, value: value.replace(/\s+/g, " ") };
 }
 
 function acceptConverted(
@@ -290,6 +327,14 @@ export function convertValue(
     return { value: undefined, cleared: true };
   }
 
+  if (toType === "email" || toType === "phone") {
+    const normalized = toType === "email" ? normalizeEmail(text) : normalizePhone(text);
+    if (!normalized.ok || normalized.value === undefined) {
+      return { value: undefined, cleared: true };
+    }
+    return acceptConverted(toType, toSettings, normalized.value, false);
+  }
+
   if (toType === "link") {
     const normalized = normalizeLink(text);
     if (!normalized.ok || normalized.value === undefined) {
@@ -313,6 +358,8 @@ export function displayValue(
   switch (column.type) {
     case "text":
     case "long_text":
+    case "email":
+    case "phone":
       return typeof value === "string" ? value : "";
     case "number":
       return typeof value === "number" && Number.isFinite(value) ? String(value) : "";

@@ -3,7 +3,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, EyeOff, Lock } from "lucide-react";
+import { ProtectDialog, TabVisibilityDialog } from "@/components/grid/ProtectDialog";
 import { AddTabButton } from "./AddTabButton";
 import {
   archiveSheet,
@@ -32,10 +33,13 @@ export function SheetTabs({
   role,
   sheets,
   archived,
+  managedWorkbookIds = [],
 }: {
   role: Role;
   sheets: SheetSummary[];
   archived: SheetSummary[];
+  /** Sheets this person can protect and hide tabs on. */
+  managedWorkbookIds?: string[];
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -48,6 +52,8 @@ export function SheetTabs({
   const [allOpen, setAllOpen] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [duplicating, setDuplicating] = useState<SheetSummary | null>(null);
+  const [protecting, setProtecting] = useState<SheetSummary | null>(null);
+  const [hiding, setHiding] = useState<SheetSummary | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
@@ -242,6 +248,20 @@ export function SheetTabs({
         });
       }
     }
+    if (managedWorkbookIds.includes(sheet.workbookId)) {
+      items.push(
+        {
+          id: "protect",
+          label: sheet.locked ? "Tab protection…" : "Protect tab…",
+          onSelect: () => setProtecting(sheet),
+        },
+        {
+          id: "visibility",
+          label: sheet.hidden ? "Who can see this tab… (hidden)" : "Who can see this tab…",
+          onSelect: () => setHiding(sheet),
+        },
+      );
+    }
     if (canArchive) {
       items.push({
         id: "delete",
@@ -377,6 +397,8 @@ export function SheetTabs({
                   className={`flex max-w-48 items-center gap-1 truncate px-3 ${active ? "font-medium" : "text-muted hover:text-text"}`}
                 >
                   <span className="truncate">{sheet.name}</span>
+                  {sheet.locked ? <Lock className="size-3 shrink-0 text-muted" aria-label="Protected tab" /> : null}
+                  {sheet.hidden ? <EyeOff className="size-3 shrink-0 text-muted" aria-label="Hidden from some people" /> : null}
                   <TabPresence sheetId={sheet.id} />
                 </Link>
               )}
@@ -424,6 +446,28 @@ export function SheetTabs({
           items={openItems}
           position={{ left: menu.left, bottom: menu.bottom }}
           onClose={() => setMenu(null)}
+        />
+      ) : null}
+      {protecting ? (
+        <ProtectDialog
+          sheetId={protecting.id}
+          scope="tab"
+          targetId={null}
+          targetName={protecting.name}
+          onClose={() => {
+            setProtecting(null);
+            router.refresh();
+          }}
+        />
+      ) : null}
+      {hiding ? (
+        <TabVisibilityDialog
+          sheetId={hiding.id}
+          tabName={hiding.name}
+          onClose={() => {
+            setHiding(null);
+            router.refresh();
+          }}
         />
       ) : null}
       {duplicating ? (

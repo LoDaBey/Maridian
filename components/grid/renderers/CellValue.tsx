@@ -182,6 +182,22 @@ export function CellValue({
     );
   }
 
+  if ((column.type === "email" || column.type === "phone") && typeof value === "string" && value) {
+    const href = column.type === "email" ? `mailto:${value}` : `tel:${value.replace(/[^\d+]/g, "")}`;
+    return (
+      <span dir="ltr" className={`flex h-full w-full items-center px-2 ${rowAlign}`} title={value}>
+        <a
+          href={href}
+          className="truncate rounded text-primary hover:underline"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {value}
+        </a>
+      </span>
+    );
+  }
+
   if (column.type === "link") {
     const link = asLink(value);
     if (!link) {

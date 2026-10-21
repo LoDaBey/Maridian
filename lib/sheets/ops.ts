@@ -22,6 +22,9 @@ export const COLUMN_TYPES = [
   "created_at",
   "updated_at",
   "item_id",
+  "email",
+  "phone",
+  "progress",
 ] as const satisfies readonly ColumnType[];
 
 const positionSchema = z.string().trim().min(1, "Enter a position.").max(200);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { ChevronDown, Filter } from "lucide-react";
+import { ChevronDown, Filter, Gauge, Mail, Phone, Lock } from "lucide-react";
 import { readFillColor } from "@/lib/sheets/values";
 import {
   Calendar,
@@ -30,6 +30,7 @@ import { PresenceDot } from "@/components/presence/PresenceDot";
 import { usePresenceOnColumn } from "@/stores/presence-store";
 import { ColumnFilterMenu } from "./ColumnFilterMenu";
 import { ColumnMenu } from "./ColumnMenu";
+import { useIsProtected } from "./ProtectionContext";
 
 const ICONS: Record<ColumnType, LucideIcon> = {
   text: Type,
@@ -52,6 +53,9 @@ const ICONS: Record<ColumnType, LucideIcon> = {
   rating: Star,
   files: Paperclip,
   due_date: Calendar,
+  email: Mail,
+  phone: Phone,
+  progress: Gauge,
 };
 
 let closeOpenColumnMenu: (() => void) | null = null;
@@ -114,6 +118,7 @@ export function HeaderCell({
 }) {
   const Icon = ICONS[type];
   const dots = usePresenceOnColumn(columnId);
+  const isProtected = useIsProtected("column", columnId);
   const headerColor = readFillColor(settings, "headerColor");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [filterOpen, setFilterOpen] = useState<{ x: number; y: number } | null>(null);
@@ -277,6 +282,7 @@ export function HeaderCell({
         >
           <Icon className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
           <span className="truncate">{name}</span>
+          {isProtected ? <Lock className="size-3 shrink-0 text-muted" aria-label="Protected column" /> : null}
           <PresenceDot colors={dots.colors} extra={dots.extra} />
         </button>
       )}

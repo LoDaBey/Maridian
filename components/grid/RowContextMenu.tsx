@@ -4,9 +4,9 @@ import { useState } from "react";
 import { useStore } from "zustand";
 import { CellHistoryPopover } from "@/components/history/CellHistoryPopover";
 import { Menu, MenuItem } from "@/components/ui/Menu";
-import { can, canDeleteRow } from "@/lib/rbac";
+import { canDeleteRow } from "@/lib/rbac";
 import { useSheetStore } from "@/stores/sheet-store";
-import { useMe } from "./MeContext";
+import { useMe, canDo } from "./MeContext";
 
 export function RowContextMenu({
   menu,
@@ -29,14 +29,14 @@ export function RowContextMenu({
   const me = useMe();
   const [history, setHistory] = useState<{ rowId: string; columnId: string; x: number; y: number } | null>(null);
   const columnId = menu ? columnUnderPointer(menu.x, menu.y, menu.rowId) : null;
-  const allowed = targets.length > 0 && targets.every((rowId) => canDeleteRow(me, { created_by: store.getState().rows[rowId]?.createdBy ?? null }));
+  const allowed = targets.length > 0 && targets.every((rowId) => !me.viewOnly && canDeleteRow(me, { created_by: store.getState().rows[rowId]?.createdBy ?? null }));
 
   if (!menu && !history) {
     return null;
   }
 
   const count = targets.length;
-  const canRestore = can(me.role, "cell.edit") && !archived;
+  const canRestore = canDo(me, "cell.edit") && !archived;
 
   return (
     <>

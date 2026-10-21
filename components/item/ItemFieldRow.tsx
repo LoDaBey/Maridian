@@ -7,6 +7,7 @@ import type { LocalColumn, LocalRow } from "@/lib/sheets/apply-local";
 import { FieldEditor } from "@/components/grid/editors/FieldEditor";
 import { TextEditor } from "@/components/grid/editors/TextEditor";
 import { AutoCellValue } from "@/components/grid/renderers/AutoCellValue";
+import { useCellLocked } from "@/components/grid/ProtectionContext";
 import { CellValue } from "@/components/grid/renderers/CellValue";
 import type { DirectoryUser } from "@/components/grid/types";
 import { dueToneFor, rowIsDone } from "@/lib/sheets/column-meta";
@@ -33,7 +34,8 @@ export function ItemFieldRow({
   const [editing, setEditing] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const automatic = isAutomaticColumnType(column.type);
-  const locked = readOnly || automatic;
+  const protectedCell = useCellLocked(column.id, row.groupId);
+  const locked = readOnly || automatic || protectedCell;
   const value = row.data[column.id];
   const inline = column.type === "text" || column.type === "number";
   const columns = useSheetStore().getState().columns;

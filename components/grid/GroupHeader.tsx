@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { ChevronDown, GripVertical, MoreHorizontal } from "lucide-react";
+import { ChevronDown, GripVertical, Lock, MoreHorizontal } from "lucide-react";
+import { useIsProtected } from "./ProtectionContext";
 
 export function GroupHeader({
   groupId,
@@ -32,6 +33,7 @@ export function GroupHeader({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
+  const isProtected = useIsProtected("group", groupId);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -117,6 +119,11 @@ export function GroupHeader({
           {name}
         </button>
       )}
+      {isProtected ? (
+        <span title="Protected group" className="inline-flex text-muted">
+          <Lock className="size-3.5" aria-label="Protected group" />
+        </span>
+      ) : null}
       <span className="text-xs text-muted">{count}</span>
       <div className="flex-1" />
       {canEdit ? (

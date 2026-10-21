@@ -31,6 +31,44 @@ CREATE TABLE IF NOT EXISTS monitor_user_sessions (
 CREATE INDEX IF NOT EXISTS monitor_user_sessions_user_idx ON monitor_user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS monitor_user_sessions_expires_idx ON monitor_user_sessions(expires_at);
 
+-- ---------- workspaces (Monday-style containers for sheets) ----------
+CREATE TABLE IF NOT EXISTS monitor_workspaces (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name         text NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 60),
+  description  text NOT NULL DEFAULT '' CHECK (length(description) <= 500),
+  color        text NOT NULL DEFAULT '#0073ea',
+  created_by   uuid REFERENCES monitor_users(id) ON DELETE SET NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now()
+);
+
+-- Only members see a workspace. Owners and admins invite and manage members.
+CREATE TABLE IF NOT EXISTS monitor_workspace_members (
+  workspace_id  uuid NOT NULL REFERENCES monitor_workspaces(id) ON DELETE CASCADE,
+  user_id       uuid NOT NULL REFERENCES monitor_users(id) ON DELETE CASCADE,
+  role          text NOT NULL DEFAULT 'member' CHECK (role IN ('owner','admin','member')),
+  added_by      uuid REFERENCES monitor_users(id) ON DELETE SET NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS monitor_workspace_members_user_idx ON monitor_workspace_members(user_id);
+
+-- A user joins a workspace only by accepting an invitation.
+CREATE TABLE IF NOT EXISTS monitor_workspace_invitations (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  uuid NOT NULL REFERENCES monitor_workspaces(id) ON DELETE CASCADE,
+  user_id       uuid NOT NULL REFERENCES monitor_users(id) ON DELETE CASCADE,
+  role          text NOT NULL DEFAULT 'member' CHECK (role IN ('admin','member')),
+  invited_by    uuid REFERENCES monitor_users(id) ON DELETE SET NULL,
+  status        text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined','cancelled')),
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  responded_at  timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS monitor_workspace_invitations_pending_idx
+  ON monitor_workspace_invitations(workspace_id, user_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS monitor_workspace_invitations_user_idx
+  ON monitor_workspace_invitations(user_id) WHERE status = 'pending';
+
 -- ---------- workbooks (home-page files) and sheets (tabs / grids) ----------
 CREATE TABLE IF NOT EXISTS monitor_workbooks (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -60,19 +98,37 @@ CREATE TABLE IF NOT EXISTS monitor_workbook_members (
 );
 CREATE INDEX IF NOT EXISTS monitor_workbook_members_user_idx ON monitor_workbook_members(user_id);
 
--- Keep existing sheets visible to everyone who already uses the app.
-INSERT INTO monitor_workbook_members (workbook_id, user_id, added_by)
-SELECT w.id, u.id, w.created_by
-FROM monitor_workbooks w
-CROSS JOIN monitor_users u
-WHERE u.is_active = true
-ON CONFLICT DO NOTHING;
+-- Sheet-level role: owner (creator, manages sharing), editor, viewer (read-only grid).
+ALTER TABLE monitor_workbook_members
+  ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'editor';
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'monitor_workbook_members'::regclass
+      AND conname = 'monitor_workbook_members_role_check'
+  ) THEN
+    ALTER TABLE monitor_workbook_members
+      ADD CONSTRAINT monitor_workbook_members_role_check CHECK (role IN ('owner','editor','viewer'));
+  END IF;
+END $$;
 
-INSERT INTO monitor_workbook_members (workbook_id, user_id, added_by)
-SELECT w.id, w.created_by, w.created_by
+INSERT INTO monitor_workbook_members (workbook_id, user_id, added_by, role)
+SELECT w.id, w.created_by, w.created_by, 'owner'
 FROM monitor_workbooks w
 WHERE w.created_by IS NOT NULL
 ON CONFLICT DO NOTHING;
+
+UPDATE monitor_workbook_members m
+SET role = 'owner'
+FROM monitor_workbooks w
+WHERE w.id = m.workbook_id AND w.created_by = m.user_id AND m.role <> 'owner';
+
+-- Every sheet lives in a workspace.
+ALTER TABLE monitor_workbooks
+  ADD COLUMN IF NOT EXISTS workspace_id uuid REFERENCES monitor_workspaces(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS monitor_workbooks_workspace_idx
+  ON monitor_workbooks(workspace_id, position) WHERE archived_at IS NULL AND deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS monitor_sheets (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -128,11 +184,46 @@ END $$;
 CREATE INDEX IF NOT EXISTS monitor_sheets_workbook_idx
   ON monitor_sheets(workbook_id, position) WHERE archived_at IS NULL;
 
+-- One-time move of sheets made before workspaces existed into "Main workspace".
+-- Everyone who could open a sheet then keeps that access as a workspace member.
+DO $$
+DECLARE
+  ws uuid;
+  owner_id uuid;
+BEGIN
+  IF EXISTS (SELECT 1 FROM monitor_workbooks WHERE workspace_id IS NULL) THEN
+    SELECT id INTO ws FROM monitor_workspaces ORDER BY created_at LIMIT 1;
+    IF ws IS NULL THEN
+      SELECT id INTO owner_id FROM monitor_users
+      WHERE role = 'admin' AND is_active = true
+      ORDER BY created_at
+      LIMIT 1;
+      ws := gen_random_uuid();
+      INSERT INTO monitor_workspaces (id, name, created_by) VALUES (ws, 'Main workspace', owner_id);
+      INSERT INTO monitor_workspace_members (workspace_id, user_id, role, added_by)
+      SELECT DISTINCT ws, m.user_id, 'member', owner_id
+      FROM monitor_workbook_members m
+      JOIN monitor_users u ON u.id = m.user_id
+      WHERE u.is_active = true
+      ON CONFLICT DO NOTHING;
+      IF owner_id IS NOT NULL THEN
+        INSERT INTO monitor_workspace_members (workspace_id, user_id, role, added_by)
+        VALUES (ws, owner_id, 'owner', owner_id)
+        ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = 'owner';
+      END IF;
+    END IF;
+    UPDATE monitor_workbooks SET workspace_id = ws WHERE workspace_id IS NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM monitor_workbooks WHERE workspace_id IS NULL) THEN
+    ALTER TABLE monitor_workbooks ALTER COLUMN workspace_id SET NOT NULL;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS monitor_columns (
   id          uuid PRIMARY KEY,                        -- client generated
   sheet_id    uuid NOT NULL REFERENCES monitor_sheets(id) ON DELETE CASCADE,
   name        text NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
-  type        text NOT NULL CHECK (type IN ('text','long_text','link','date','person','status','number','checkbox','timeline','tags','dropdown','country','priority','rating','files','due_date','created_by','created_at','updated_at','item_id')),
+  type        text NOT NULL CHECK (type IN ('text','long_text','link','date','person','status','number','checkbox','timeline','tags','dropdown','country','priority','rating','files','due_date','created_by','created_at','updated_at','item_id','email','phone','progress')),
   position    text COLLATE "C" NOT NULL,
   width       integer NOT NULL DEFAULT 180 CHECK (width BETWEEN 60 and 800),
   settings    jsonb NOT NULL DEFAULT '{}'::jsonb,     -- e.g. status options, person multi
@@ -149,7 +240,7 @@ BEGIN
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'monitor_columns'::regclass
       AND conname = 'monitor_columns_type_check'
-      AND pg_get_constraintdef(oid) NOT LIKE '%due_date%'
+      AND pg_get_constraintdef(oid) NOT LIKE '%progress%'
   ) THEN
     ALTER TABLE monitor_columns DROP CONSTRAINT monitor_columns_type_check;
   END IF;
@@ -160,7 +251,7 @@ BEGIN
   ) THEN
     ALTER TABLE monitor_columns
       ADD CONSTRAINT monitor_columns_type_check
-      CHECK (type IN ('text','long_text','link','date','person','status','number','checkbox','timeline','tags','dropdown','country','priority','rating','files','due_date','created_by','created_at','updated_at','item_id'));
+      CHECK (type IN ('text','long_text','link','date','person','status','number','checkbox','timeline','tags','dropdown','country','priority','rating','files','due_date','created_by','created_at','updated_at','item_id','email','phone','progress'));
   END IF;
 END $$;
 
@@ -299,7 +390,7 @@ CREATE TABLE IF NOT EXISTS monitor_update_reads (
 CREATE TABLE IF NOT EXISTS monitor_notifications (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     uuid NOT NULL REFERENCES monitor_users(id) ON DELETE CASCADE,
-  type        text NOT NULL CHECK (type IN ('mention','assign','reply','status','due')),
+  type        text NOT NULL CHECK (type IN ('mention','assign','reply','status','due','share')),
   sheet_id    uuid NOT NULL REFERENCES monitor_sheets(id) ON DELETE CASCADE,
   row_id      uuid,
   actor_id    uuid REFERENCES monitor_users(id) ON DELETE SET NULL,
@@ -318,7 +409,7 @@ BEGIN
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'monitor_notifications'::regclass
       AND conname = 'monitor_notifications_type_check'
-      AND pg_get_constraintdef(oid) NOT LIKE '%due%'
+      AND pg_get_constraintdef(oid) NOT LIKE '%share%'
   ) THEN
     ALTER TABLE monitor_notifications DROP CONSTRAINT monitor_notifications_type_check;
   END IF;
@@ -329,19 +420,55 @@ BEGIN
   ) THEN
     ALTER TABLE monitor_notifications
       ADD CONSTRAINT monitor_notifications_type_check
-      CHECK (type IN ('mention','assign','reply','status','due'));
+      CHECK (type IN ('mention','assign','reply','status','due','share'));
   END IF;
 END $$;
 
 ALTER TABLE monitor_updates
   ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]'::jsonb;
 
+-- ---------- protection (Google-Sheets style) ----------
+-- A lock on a whole tab, one group, or one column's cells. Only the sheet owner,
+-- workspace owners/admins, app admins and the listed editors can change or delete there.
+CREATE TABLE IF NOT EXISTS monitor_protections (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  sheet_id    uuid NOT NULL REFERENCES monitor_sheets(id) ON DELETE CASCADE,
+  scope       text NOT NULL CHECK (scope IN ('tab','group','column')),
+  target_id   uuid,
+  editors     uuid[] NOT NULL DEFAULT '{}',
+  created_by  uuid REFERENCES monitor_users(id) ON DELETE SET NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  CHECK ((scope = 'tab') = (target_id IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS monitor_protections_target_idx
+  ON monitor_protections(sheet_id, scope, COALESCE(target_id, '00000000-0000-0000-0000-000000000000'::uuid));
+
+-- Who can see a tab. NULL = everyone who can open the sheet. Managers always see it.
+ALTER TABLE monitor_sheets ADD COLUMN IF NOT EXISTS visible_to uuid[];
+
+-- ---------- workspace dashboards ----------
+-- Shared chart widgets on a workspace dashboard. Each widget reads one or more sheets
+-- (all their tabs) and stores its chart settings in `config`.
+CREATE TABLE IF NOT EXISTS monitor_dashboard_widgets (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  uuid NOT NULL REFERENCES monitor_workspaces(id) ON DELETE CASCADE,
+  title         text NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 100),
+  config        jsonb NOT NULL DEFAULT '{}'::jsonb,
+  position      integer NOT NULL DEFAULT 0,
+  created_by    uuid REFERENCES monitor_users(id) ON DELETE SET NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS monitor_dashboard_widgets_workspace_idx
+  ON monitor_dashboard_widgets(workspace_id, position);
+
 -- ---------- updated_at trigger ----------
 CREATE OR REPLACE FUNCTION monitor_touch_updated_at() RETURNS trigger AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END; $$ LANGUAGE plpgsql;
 
 DO $$ DECLARE t text; BEGIN
-  FOREACH t IN ARRAY ARRAY['monitor_users','monitor_workbooks','monitor_sheets','monitor_columns','monitor_rows','monitor_groups','monitor_updates','monitor_update_replies'] LOOP
+  FOREACH t IN ARRAY ARRAY['monitor_users','monitor_workspaces','monitor_dashboard_widgets','monitor_protections','monitor_workbooks','monitor_sheets','monitor_columns','monitor_rows','monitor_groups','monitor_updates','monitor_update_replies'] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = t || '_touch') THEN
       EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION monitor_touch_updated_at()', t || '_touch', t);
     END IF;

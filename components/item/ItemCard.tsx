@@ -7,7 +7,7 @@ import { useSheetDispatch } from "@/lib/realtime/sheet-session";
 import type { StatusOption } from "@/lib/sheets/values";
 import { useColumns, useRow } from "@/stores/sheet-store";
 import { useDirectory } from "@/components/grid/useDirectory";
-import { useMe } from "@/components/grid/MeContext";
+import { useMe, canDo } from "@/components/grid/MeContext";
 import { can } from "@/lib/rbac";
 import type { JsonValue } from "@/lib/sheets/ops";
 import { ItemActivity } from "./ItemActivity";
@@ -36,7 +36,7 @@ export function ItemCard({
   const { users } = useDirectory();
   const me = useMe();
   const [tab, setTab] = useState<ItemTab>("fields");
-  const readOnly = !can(me.role, "cell.edit");
+  const readOnly = !canDo(me, "cell.edit");
   const titleColumn = columns.find((column) => column.type === "text");
   const title = titleColumn ? String(row?.data[titleColumn.id] ?? "") : "";
 

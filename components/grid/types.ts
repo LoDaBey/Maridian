@@ -16,6 +16,8 @@ export interface DirectoryResponse {
 export interface SheetViewer {
   id: string;
   role: Role;
+  /** Shared with this person as a viewer: the grid is read-only for them. */
+  viewOnly?: boolean;
 }
 
 export interface CellAddress {
@@ -42,7 +44,7 @@ export interface HistoryEntry {
   inverse: { type: SheetOp["type"]; payload: SheetOp["payload"] };
 }
 
-export type BoardLayout = "table" | "kanban" | "timeline";
+export type BoardLayout = "table" | "kanban" | "timeline" | "chart";
 
 export interface KanbanLane {
   id: string;

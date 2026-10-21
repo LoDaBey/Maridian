@@ -42,7 +42,9 @@ export type Action =
   | "csv.import"
   | "user.manage"
   | "sheet.purge"
-  | "template.delete";
+  | "template.delete"
+  | "workspace.create"
+  | "workspace.manage_all";
 
 /** Lowest role allowed to perform the action. Every higher role is allowed too. */
 export const MIN_ROLE: Record<Action, Role> = {
@@ -70,17 +72,9 @@ export const MIN_ROLE: Record<Action, Role> = {
   "user.manage": "admin",
   "sheet.purge": "admin",
   "template.delete": "admin",
+  "workspace.create": "project_manager",
+  "workspace.manage_all": "admin",
 };
-
-export function canShareWorkbook(
-  user: { id: string; role: Role },
-  workbook: { createdBy: string | null },
-): boolean {
-  if (workbook.createdBy === user.id) {
-    return true;
-  }
-  return can(user.role, "sheet.share");
-}
 
 export function can(role: Role, action: Action): boolean {
   return roleRank(role) >= roleRank(MIN_ROLE[action]);

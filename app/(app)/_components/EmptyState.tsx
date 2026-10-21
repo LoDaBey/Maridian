@@ -5,10 +5,12 @@ import { NewSheetDialog } from "./NewSheetDialog";
 import type { SavedTemplateSummary } from "@/lib/sheets/sheets-repo";
 
 export function EmptyState({
+  workspaceId,
   canCreate,
   suggestedName,
   savedTemplates = [],
 }: {
+  workspaceId: string;
   canCreate: boolean;
   suggestedName: string;
   savedTemplates?: SavedTemplateSummary[];
@@ -31,6 +33,7 @@ export function EmptyState({
         <p className="text-muted">Ask a project manager to create one.</p>
       )}
       <NewSheetDialog
+        workspaceId={workspaceId}
         key={open ? suggestedName : "closed"}
         open={open}
         suggestedName={suggestedName}

@@ -11,6 +11,7 @@ import { AutoCellValue } from "./renderers/AutoCellValue";
 import { FieldEditor } from "./editors/FieldEditor";
 import { CellPresenceOverlay } from "@/components/presence/CellPresenceOverlay";
 import { CellValue } from "./renderers/CellValue";
+import { useCellLocked } from "./ProtectionContext";
 import type { DirectoryUser } from "./types";
 
 const NAME_OPEN_DELAY_MS = 250;
@@ -81,6 +82,7 @@ export const GridCell = memo(function GridCell({
   const value = useCell(rowId, columnId);
   const column = useColumn(columnId);
   const row = useRow(rowId);
+  const protectedCell = useCellLocked(columnId, row?.groupId);
   const nameOpenTimer = useRef<number>(0);
 
   useEffect(() => {
@@ -91,7 +93,7 @@ export const GridCell = memo(function GridCell({
     return null;
   }
   const automatic = isAutomaticColumnType(column.type);
-  const locked = readOnly || automatic;
+  const locked = readOnly || automatic || protectedCell;
   const ownColor = column.type === "status" || column.type === "priority" || column.type === "dropdown";
   const fillColor = ownColor ? undefined : readFillColor(column.settings, "fillColor");
   const columns = useSheetStore().getState().columns;

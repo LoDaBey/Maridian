@@ -25,7 +25,10 @@ export type ColumnType =
   | "created_by"
   | "created_at"
   | "updated_at"
-  | "item_id";
+  | "item_id"
+  | "email"
+  | "phone"
+  | "progress";
 
 export type PriorityLevel = "critical" | "high" | "medium" | "low";
 
@@ -69,6 +72,7 @@ export const AUTOMATIC_COLUMN_TYPES = [
   "created_at",
   "updated_at",
   "item_id",
+  "progress",
 ] as const satisfies readonly ColumnType[];
 
 export function isAutomaticColumnType(type: ColumnType): boolean {
@@ -109,7 +113,7 @@ export const FILL_COLORS = [
 
 export type FillColor = (typeof FILL_COLORS)[number];
 
-export type NotificationType = "mention" | "assign" | "reply" | "status" | "due";
+export type NotificationType = "mention" | "assign" | "reply" | "status" | "due" | "share";
 
 export interface NotificationItem {
   id: string;
@@ -375,6 +379,7 @@ export interface WorkbookMember {
   email: string;
   role: Role;
   avatarColor: string;
+  boardRole: "owner" | "editor" | "viewer";
   isOwner: boolean;
   addedAt: string;
 }

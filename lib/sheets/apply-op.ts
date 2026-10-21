@@ -21,7 +21,8 @@ import {
   normalizeSettings,
   normalizeValue,
 } from "@/lib/sheets/values";
-import { ensureMembersForSheet } from "@/lib/sheets/workbook-access";
+import { protectionBlock } from "@/lib/sheets/protection-check";
+import { ensureMembersForSheet, getSheetAccess, loadProtections, locksFor } from "@/lib/sheets/workbook-access";
 
 const CACHE_LIMIT = 10_000;
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -155,18 +156,20 @@ async function applyInside(
   if (locked.archived_at) {
     return { ok: false, code: "read_only", message: "This sheet is archived." };
   }
-  if (!can(user.role, "sheet.view_all")) {
-    const member = await client.query<{ ok: number }>(
-      `SELECT 1 AS ok
-       FROM monitor_workbook_members m
-       JOIN monitor_sheets s ON s.workbook_id = m.workbook_id
-       WHERE s.id = $1 AND m.user_id = $2
-       LIMIT 1`,
-      [op.sheetId, user.id],
-    );
-    if (member.rows.length === 0) {
-      return { ok: false, code: "forbidden", message: "You don't have access to this sheet." };
-    }
+  const access = await getSheetAccess(user, op.sheetId, client);
+  if (!access) {
+    return { ok: false, code: "forbidden", message: "You don't have access to this sheet." };
+  }
+  if (access.role === "viewer") {
+    return { ok: false, code: "read_only", message: "You can view this sheet but not edit it." };
+  }
+  const blocked = await protectionBlock(
+    client,
+    op,
+    locksFor(access, user.id, await loadProtections(op.sheetId, client)),
+  );
+  if (blocked) {
+    return { ok: false, code: "forbidden", message: blocked };
   }
 
   const permission = permissionFor(op);

@@ -5,21 +5,24 @@ import { generateKeyBetween } from "fractional-indexing";
 import {
   AlignLeft,
   Calendar,
+  CalendarRange,
   CheckSquare,
   CircleDot,
   Clock,
   Fingerprint,
+  Flag,
+  Gauge,
   Hash,
   Link2,
-  Type,
-  UserRound,
-  Flag,
-  CalendarRange,
   ListChecks,
+  Mail,
   Paperclip,
+  Phone,
   Star,
   Tags,
   TriangleAlert,
+  Type,
+  UserRound,
   type LucideIcon,
 } from "lucide-react";
 import { defaultColumnSettings, PRIORITY_OPTIONS } from "@/lib/sheets/column-meta";
@@ -31,12 +34,16 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Menu, MenuItem } from "@/components/ui/Menu";
 import { ColumnFillPicker } from "./ColumnFillPicker";
 import { StatusOptionsEditor, type StatusDraft } from "./StatusOptionsEditor";
+import { ProtectDialog } from "./ProtectDialog";
+import { useIsProtected, useProtection } from "./ProtectionContext";
 import { readFillColor } from "@/lib/sheets/values";
 
 export const COLUMN_TYPE_OPTIONS: Array<{ type: ColumnType; label: string; icon: LucideIcon }> = [
   { type: "text", label: "Text", icon: Type },
   { type: "long_text", label: "Long text", icon: AlignLeft },
   { type: "link", label: "Link", icon: Link2 },
+  { type: "email", label: "Email", icon: Mail },
+  { type: "phone", label: "Phone", icon: Phone },
   { type: "date", label: "Date", icon: Calendar },
   { type: "person", label: "Person", icon: UserRound },
   { type: "status", label: "Status", icon: CircleDot },
@@ -54,6 +61,7 @@ export const COLUMN_TYPE_OPTIONS: Array<{ type: ColumnType; label: string; icon:
   { type: "created_at", label: "Created at", icon: Calendar },
   { type: "updated_at", label: "Updated at", icon: Clock },
   { type: "item_id", label: "Item ID", icon: Fingerprint },
+  { type: "progress", label: "Progress", icon: Gauge },
 ];
 
 export function starterStatusOptions(): StatusDraft[] {
@@ -126,6 +134,9 @@ export function ColumnMenu({
   onOfferUndo: (message: string, undo: () => void) => void;
 }) {
   const store = useSheetStore();
+  const protection = useProtection();
+  const isProtected = useIsProtected("column", columnId);
+  const [protectOpen, setProtectOpen] = useState(false);
   const [typesOpen, setTypesOpen] = useState(false);
   const [pendingType, setPendingType] = useState<{ type: ColumnType; cleared: number } | null>(null);
   const [labelsOpen, setLabelsOpen] = useState(false);
@@ -264,6 +275,15 @@ export function ColumnMenu({
             <MenuItem label="Cell color" onSelect={() => setFillOpen("cells")} />
           </>
         ) : null}
+        {protection.canManage ? (
+          <MenuItem
+            label={isProtected ? "Protection…" : "Protect column…"}
+            onSelect={() => {
+              closeAll();
+              setProtectOpen(true);
+            }}
+          />
+        ) : null}
         {canDelete ? (
           <MenuItem
             label="Delete column"
@@ -297,6 +317,15 @@ export function ColumnMenu({
           }}
         />
       </Menu>
+      {protectOpen ? (
+        <ProtectDialog
+          sheetId={store.getState().sheet.id}
+          scope="column"
+          targetId={columnId}
+          targetName={name}
+          onClose={() => setProtectOpen(false)}
+        />
+      ) : null}
       <Menu open={open && typesOpen} x={x + 220} y={y + 36} label={`Change type for ${name}`} onClose={() => setTypesOpen(false)}>
         {COLUMN_TYPE_OPTIONS.map((option) => {
           const Icon = option.icon;

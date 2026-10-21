@@ -8,12 +8,14 @@ import { createSheet } from "@/app/(app)/sheets/actions";
 import type { SavedTemplateSummary } from "@/lib/sheets/sheets-repo";
 
 export function TemplateCard({
+  workspaceId,
   template,
   suggestedName,
   canUse,
   canDelete,
   onDelete,
 }: {
+  workspaceId: string;
   template: SavedTemplateSummary;
   suggestedName: string;
   canUse: boolean;
@@ -55,7 +57,7 @@ export function TemplateCard({
     setPending(true);
     setError("");
     try {
-      const result = await createSheet({ name: suggestedName, savedTemplateId: template.id });
+      const result = await createSheet({ workspaceId, name: suggestedName, savedTemplateId: template.id });
       if (result.error || !result.id) {
         setError(result.error || "Could not create the sheet.");
         return;

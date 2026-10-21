@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, type ReactNode } from "react";
+import { can, type Action } from "@/lib/rbac";
 import type { SheetViewer } from "./types";
 
 const MeContext = createContext<SheetViewer | null>(null);
@@ -15,4 +16,15 @@ export function useMe(): SheetViewer {
     throw new Error("useMe must be used inside MeProvider.");
   }
   return me;
+}
+
+/** Actions a sheet viewer may still use: reading, exporting and history. */
+const VIEWER_ACTIONS = new Set<Action>(["sheet.view", "sheet.view_all", "history.view", "csv.export"]);
+
+/** Role check that also honours a view-only share on this sheet. */
+export function canDo(me: SheetViewer, action: Action): boolean {
+  if (me.viewOnly && !VIEWER_ACTIONS.has(action)) {
+    return false;
+  }
+  return can(me.role, action);
 }

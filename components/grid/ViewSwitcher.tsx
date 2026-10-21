@@ -1,6 +1,6 @@
 "use client";
 
-import { GanttChart, SquareKanban, Table2 } from "lucide-react";
+import { ChartColumnBig, GanttChart, SquareKanban, Table2 } from "lucide-react";
 import { LayoutGroup, motion } from "framer-motion";
 import { ActionButton } from "./ActionButton";
 import type { BoardLayout } from "./types";
@@ -9,6 +9,7 @@ const VIEWS: Array<{ id: BoardLayout; label: string; icon: typeof Table2 }> = [
   { id: "table", label: "Main table", icon: Table2 },
   { id: "timeline", label: "Timeline", icon: GanttChart },
   { id: "kanban", label: "Kanban", icon: SquareKanban },
+  { id: "chart", label: "Chart", icon: ChartColumnBig },
 ];
 
 export function ViewSwitcher({

@@ -9,10 +9,9 @@ import { ActivityDrawer } from "@/components/history/ActivityDrawer";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { ColumnType } from "@/lib/db-types";
 import type { JsonValue } from "@/lib/sheets/ops";
-import { can } from "@/lib/rbac";
 import { deriveRowOrder, formatRowCount, type FilterRule, type SortRule } from "@/lib/sheets/view";
 import { useSheetStore } from "@/stores/sheet-store";
-import { useMe } from "./MeContext";
+import { useMe, canDo } from "./MeContext";
 import type { DirectoryUser } from "./types";
 
 export function Toolbar({
@@ -61,13 +60,13 @@ export function Toolbar({
   const sheet = useStore(store, (state) => state.sheet);
   const archived = useStore(store, (state) => state.archived);
   const me = useMe();
-  const canImport = can(me.role, "csv.import") && !archived;
+  const canImport = canDo(me, "csv.import") && !archived;
   const [sortOpen, setSortOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  const canHistory = can(me.role, "history.view");
+  const canHistory = canDo(me, "history.view");
   const [exportError, setExportError] = useState("");
   const active = Boolean(search.trim() || filters.length || sort || mine || today);
   const filterCount = filters.length + Number(mine) + Number(today);

@@ -28,7 +28,7 @@ function read(sheetId: string): BoardLayout {
     return "table";
   }
   const stored = window.localStorage.getItem(`monitor:layout:${sheetId}`);
-  const layout: BoardLayout = stored === "kanban" || stored === "timeline" ? stored : "table";
+  const layout: BoardLayout = stored === "kanban" || stored === "timeline" || stored === "chart" ? stored : "table";
   cache.set(sheetId, layout);
   return layout;
 }
