@@ -18,6 +18,8 @@ export interface SheetViewer {
   role: Role;
   /** Shared with this person as a viewer: the grid is read-only for them. */
   viewOnly?: boolean;
+  /** Shared as "assigned only": edits items assigned to them, never the sheet structure. */
+  assignedOnly?: boolean;
 }
 
 export interface CellAddress {

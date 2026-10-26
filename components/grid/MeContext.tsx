@@ -21,9 +21,15 @@ export function useMe(): SheetViewer {
 /** Actions a sheet viewer may still use: reading, exporting and history. */
 const VIEWER_ACTIONS = new Set<Action>(["sheet.view", "sheet.view_all", "history.view", "csv.export"]);
 
-/** Role check that also honours a view-only share on this sheet. */
+/** What an "assigned only" member may do; the server checks the rows are theirs. */
+const ASSIGNED_ACTIONS = new Set<Action>([...VIEWER_ACTIONS, "cell.edit", "row.insert", "row.delete.own", "row.delete.any"]);
+
+/** Role check that also honours a view-only or assigned-only share on this sheet. */
 export function canDo(me: SheetViewer, action: Action): boolean {
   if (me.viewOnly && !VIEWER_ACTIONS.has(action)) {
+    return false;
+  }
+  if (me.assignedOnly && !ASSIGNED_ACTIONS.has(action)) {
     return false;
   }
   return can(me.role, action);

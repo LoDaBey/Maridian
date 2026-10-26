@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Check,
   ChevronsLeft,
@@ -14,8 +14,10 @@ import {
   Mail,
   Plus,
   Search,
+  Star,
   Users,
 } from "lucide-react";
+import { toggleFavoriteAction } from "@/app/(app)/favorites-actions";
 import type { WorkspaceBoard, WorkspaceSummary } from "@/lib/workspaces/repo";
 import { CreateWorkspaceDialog } from "./CreateWorkspaceDialog";
 import { WorkspaceBadge } from "./WorkspaceBadge";
@@ -43,14 +45,40 @@ export function WorkspaceSidebar({
   sheets,
   invitationCount,
   canCreateWorkspace,
+  canCreateSheet,
+  favoriteIds,
 }: {
   workspaces: WorkspaceSummary[];
   boards: WorkspaceBoard[];
   sheets: Array<{ id: string; workbookId: string }>;
   invitationCount: number;
   canCreateWorkspace: boolean;
+  canCreateSheet: boolean;
+  /** Starred sheets (workbook ids), newest first. */
+  favoriteIds: string[];
 }) {
   const pathname = usePathname();
+  const router = useRouter();
+  // Optimistic star state until the server refresh lands.
+  const [starred, setStarred] = useState<Set<string>>(() => new Set(favoriteIds));
+  const [syncedFavorites, setSyncedFavorites] = useState(favoriteIds);
+  if (syncedFavorites !== favoriteIds) {
+    setSyncedFavorites(favoriteIds);
+    setStarred(new Set(favoriteIds));
+  }
+  function toggleStar(workbookId: string) {
+    const on = !starred.has(workbookId);
+    setStarred((current) => {
+      const next = new Set(current);
+      if (on) {
+        next.add(workbookId);
+      } else {
+        next.delete(workbookId);
+      }
+      return next;
+    });
+    void toggleFavoriteAction({ workbookId, on }).then(() => router.refresh());
+  }
   const [collapsed, setCollapsed] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -237,9 +265,9 @@ export function WorkspaceSidebar({
               <House className="size-4" aria-hidden="true" />
               Home
             </Link>
-            <Link href={`/w/${current.id}/dashboard`} className={navItem(pathname === `/w/${current.id}/dashboard`)}>
+            <Link href={`/w/${current.id}/dashboards`} className={navItem(pathname.startsWith(`/w/${current.id}/dashboards`))}>
               <LayoutDashboard className="size-4" aria-hidden="true" />
-              Dashboard
+              Dashboards
             </Link>
             <Link href={`/w/${current.id}/members`} className={navItem(pathname === `/w/${current.id}/members`)}>
               <Users className="size-4" aria-hidden="true" />
@@ -259,18 +287,39 @@ export function WorkspaceSidebar({
         </Link>
       </nav>
 
+      {favoriteIds.some((id) => boardById.has(id)) ? (
+        <div className="mt-4 px-2">
+          <span className="px-2 text-xs font-medium uppercase tracking-wide text-muted">Favourites</span>
+          <ul className="mt-1 space-y-0.5">
+            {favoriteIds
+              .map((id) => boardById.get(id))
+              .filter((board): board is WorkspaceBoard => Boolean(board?.firstTabId))
+              .map((board) => (
+                <li key={board.id}>
+                  <Link href={`/s/${board.firstTabId}`} className={navItem(board.id === activeWorkbookId)} title={board.name}>
+                    <Star className="size-4 shrink-0 fill-[#fdab3d] text-[#fdab3d]" aria-hidden="true" />
+                    <span className="truncate" dir="auto">{board.name}</span>
+                  </Link>
+                </li>
+              ))}
+          </ul>
+        </div>
+      ) : null}
+
       {current ? (
         <div className="mt-4 flex min-h-0 flex-1 flex-col px-2">
           <div className="flex items-center justify-between px-2">
             <span className="text-xs font-medium uppercase tracking-wide text-muted">Sheets</span>
-            <Link
-              href={`/w/${current.id}?new=1`}
-              aria-label="New sheet"
-              title="New sheet"
-              className="rounded-md p-1 text-muted hover:bg-bg hover:text-text"
-            >
-              <Plus className="size-4" aria-hidden="true" />
-            </Link>
+            {canCreateSheet ? (
+              <Link
+                href={`/w/${current.id}?new=1`}
+                aria-label="New sheet"
+                title="New sheet"
+                className="rounded-md p-1 text-muted hover:bg-bg hover:text-text"
+              >
+                <Plus className="size-4" aria-hidden="true" />
+              </Link>
+            ) : null}
           </div>
           {workspaceBoards.length > 8 ? (
             <label className="mx-1 mt-2 flex items-center gap-1.5 rounded-md border border-border px-2 py-1">
@@ -286,16 +335,29 @@ export function WorkspaceSidebar({
           ) : null}
           <ul className="mt-1 min-h-0 flex-1 space-y-0.5 overflow-auto pb-3">
             {shownBoards.map((board) => (
-              <li key={board.id}>
+              <li key={board.id} className="group/board relative">
                 {board.firstTabId ? (
-                  <Link
-                    href={`/s/${board.firstTabId}`}
-                    className={navItem(board.id === activeWorkbookId)}
-                    title={board.name}
-                  >
-                    <FileSpreadsheet className="size-4 shrink-0" aria-hidden="true" />
-                    <span className="truncate">{board.name}</span>
-                  </Link>
+                  <>
+                    <Link
+                      href={`/s/${board.firstTabId}`}
+                      className={`${navItem(board.id === activeWorkbookId)} pe-8`}
+                      title={board.name}
+                    >
+                      <FileSpreadsheet className="size-4 shrink-0" aria-hidden="true" />
+                      <span className="truncate">{board.name}</span>
+                    </Link>
+                    <button
+                      type="button"
+                      aria-label={starred.has(board.id) ? `Remove ${board.name} from favourites` : `Add ${board.name} to favourites`}
+                      aria-pressed={starred.has(board.id)}
+                      className={`absolute end-1 top-1/2 -translate-y-1/2 cursor-pointer rounded p-1 hover:bg-bg focus-visible:opacity-100 ${
+                        starred.has(board.id) ? "text-[#fdab3d]" : "text-muted opacity-0 group-hover/board:opacity-100"
+                      }`}
+                      onClick={() => toggleStar(board.id)}
+                    >
+                      <Star className={`size-3.5 ${starred.has(board.id) ? "fill-current" : ""}`} aria-hidden="true" />
+                    </button>
+                  </>
                 ) : (
                   <span className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted">
                     <FileSpreadsheet className="size-4 shrink-0" aria-hidden="true" />

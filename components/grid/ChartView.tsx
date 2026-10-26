@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Plus, Settings2, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Plus, Settings2, Trash2 } from "lucide-react";
 import { ChartBody } from "@/components/charts/Charts";
 import {
   ChartSettings,
@@ -11,11 +11,13 @@ import {
   rangeCaption,
   reconcileSpec,
   uniqueRefs,
+  withKind,
 } from "@/components/charts/ChartSettings";
 import {
   aggregate,
   CHART_KINDS,
   metricLabel,
+  type ChartKind,
   type ChartSpec,
   type ChartTable,
   type ColumnRef,
@@ -110,6 +112,26 @@ export function ChartView({
     [saved, refs, preferred],
   );
   const [editing, setEditing] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!picking) {
+      return;
+    }
+    const onDown = (event: PointerEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) {
+        setPicking(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && setPicking(false);
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [picking]);
 
   const table = useMemo<ChartTable>(
     () => ({
@@ -137,10 +159,11 @@ export function ChartView({
     save(charts.map((chart) => (chart.id === id ? { ...chart, spec } : chart)));
   }
 
-  function add() {
-    const chart = { id: crypto.randomUUID(), spec: defaultSpec(refs, preferred) };
+  /** Adds a chart of the picked type; its options open from the gear icon. */
+  function add(kind: ChartKind) {
+    const chart = { id: crypto.randomUUID(), spec: withKind(defaultSpec(refs, preferred), kind, refs) };
     save([...charts, chart]);
-    setEditing(chart.id);
+    setPicking(false);
   }
 
   return (
@@ -151,14 +174,34 @@ export function ChartView({
           for you on this browser.
         </p>
         {charts.length < MAX_CHARTS ? (
-          <button
-            type="button"
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm hover:bg-row"
-            onClick={add}
-          >
-            <Plus className="size-4" aria-hidden="true" />
-            Add chart
-          </button>
+          <div ref={pickerRef} className="relative shrink-0">
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={picking}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm hover:bg-row"
+              onClick={() => setPicking((value) => !value)}
+            >
+              <Plus className="size-4" aria-hidden="true" />
+              Add chart
+              <ChevronDown className="size-3.5 opacity-60" aria-hidden="true" />
+            </button>
+            {picking ? (
+              <div role="menu" aria-label="Chart type" className="absolute end-0 top-full z-30 mt-1 w-56 rounded-lg border border-border bg-surface p-1 text-sm shadow-xl">
+                {(Object.keys(KIND_LABEL) as ChartKind[]).map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="menuitem"
+                    className="block w-full cursor-pointer rounded-md px-3 py-1.5 text-start hover:bg-row"
+                    onClick={() => add(kind)}
+                  >
+                    {KIND_LABEL[kind]}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">

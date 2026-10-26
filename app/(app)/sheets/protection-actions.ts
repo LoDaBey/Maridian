@@ -20,7 +20,7 @@ export interface ProtectionPerson {
   id: string;
   fullName: string;
   avatarColor: string;
-  access: "owner" | "editor" | "viewer";
+  access: "owner" | "editor" | "assigned" | "viewer";
 }
 
 export interface ProtectionSettings {

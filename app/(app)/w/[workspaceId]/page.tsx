@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth/current-user";
 import { can } from "@/lib/rbac";
@@ -5,6 +6,7 @@ import { listArchivedWorkbooks, listSheetTemplates, listWorkbooks } from "@/lib/
 import { getWorkspace, isWorkspaceManager, listWorkspaceMembers } from "@/lib/workspaces/repo";
 import { SheetHome } from "../../_components/SheetHome";
 import { WorkspaceHeader } from "../../_components/workspace/WorkspaceHeader";
+import { WorkspaceKpis, WorkspaceKpisSkeleton } from "../../_components/workspace/WorkspaceKpis";
 
 export const instant = false;
 
@@ -36,6 +38,9 @@ export default async function WorkspacePage({
         members={members.slice(0, 6)}
         canManage={isWorkspaceManager(workspace.role)}
       />
+      <Suspense fallback={<WorkspaceKpisSkeleton />}>
+        <WorkspaceKpis viewer={{ id: user.id, role: user.role }} workspaceId={workspace.id} />
+      </Suspense>
       <SheetHome
         key={openNew ? "new" : "home"}
         workspaceId={workspace.id}

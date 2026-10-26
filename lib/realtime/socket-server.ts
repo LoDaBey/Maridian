@@ -73,6 +73,8 @@ export function attachSocketServer(httpServer: HttpServer): Server {
     // Engine.IO otherwise closes upgrade sockets it does not own, which
     // drops Next.js hot reload on this same HTTP server.
     destroyUpgrade: false,
+    // Compress only big payloads (sheet snapshots); small ops stay uncompressed and fast.
+    perMessageDeflate: { threshold: 64 * 1024 },
   });
 
   io.use(async (socket, next) => {

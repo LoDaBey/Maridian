@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth/current-user";
+import { can } from "@/lib/rbac";
 import {
   getWorkspace,
   isWorkspaceManager,
@@ -25,10 +26,11 @@ export default async function WorkspaceMembersPage({
     notFound();
   }
   const canManage = isWorkspaceManager(workspace.role);
+  const canInvite = canManage || (workspace.isMember && can(user.role, "workspace.invite"));
   const [members, invitations, invitable] = await Promise.all([
     listWorkspaceMembers(workspace.id),
     canManage ? listPendingInvitations(workspace.id) : Promise.resolve([]),
-    canManage ? listInvitableUsers(workspace.id) : Promise.resolve([]),
+    canInvite ? listInvitableUsers(workspace.id) : Promise.resolve([]),
   ]);
 
   return (
@@ -39,7 +41,8 @@ export default async function WorkspaceMembersPage({
       invitable={invitable}
       currentUserId={user.id}
       canManage={canManage}
-      openInvite={invite === "1" && canManage}
+      canInvite={canInvite}
+      openInvite={invite === "1" && canInvite}
     />
   );
 }

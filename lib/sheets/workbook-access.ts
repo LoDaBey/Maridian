@@ -5,7 +5,7 @@ import { can, type Role } from "@/lib/rbac";
 
 export type { WorkbookMember };
 
-export type BoardRole = "owner" | "editor" | "viewer";
+export type BoardRole = "owner" | "editor" | "assigned" | "viewer";
 export type WorkspaceRole = "owner" | "admin" | "member";
 
 export interface WorkbookAccess {
@@ -66,7 +66,9 @@ export function resolveAccess(viewer: Viewer, row: AccessRow | undefined): Workb
   if (!role) {
     return null;
   }
-  const workspaceManager = row.workspace_role === "owner" || row.workspace_role === "admin";
+  // Operations managers act as admins in every workspace they belong to.
+  const workspaceManager =
+    row.workspace_role === "owner" || row.workspace_role === "admin" || (row.workspace_role !== null && can(viewer.role, "sheet.view_all"));
   const canManage = appAdmin || role === "owner" || workspaceManager;
   // A hidden tab is not there at all for people it isn't shown to.
   if (row.visible_to && !canManage && !row.visible_to.includes(viewer.id)) {
@@ -162,7 +164,8 @@ export function visibleTabSql(viewer: Viewer, param = "$1"): string {
     OR EXISTS (
       SELECT 1 FROM monitor_workbooks tw
       JOIN monitor_workspace_members twm ON twm.workspace_id = tw.workspace_id
-      WHERE tw.id = s.workbook_id AND twm.user_id = ${param}::uuid AND twm.role IN ('owner', 'admin')
+      WHERE tw.id = s.workbook_id AND twm.user_id = ${param}::uuid
+        AND (twm.role IN ('owner', 'admin')${can(viewer.role, "sheet.view_all") ? " OR TRUE" : ""})
     ))`;
 }
 

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Search, UserPlus, X } from "lucide-react";
 import {
   cancelInvitationAction,
+  resendInvitationAction,
   changeMemberRoleAction,
   inviteMembersAction,
   removeMemberAction,
@@ -50,6 +51,7 @@ export function WorkspaceMembers({
   invitable,
   currentUserId,
   canManage,
+  canInvite,
   openInvite,
 }: {
   workspace: WorkspaceSummary;
@@ -58,6 +60,8 @@ export function WorkspaceMembers({
   invitable: Array<{ id: string; fullName: string; email: string; avatarColor: string }>;
   currentUserId: string;
   canManage: boolean;
+  /** Owners/admins, plus Project Managers who are members. */
+  canInvite: boolean;
   openInvite: boolean;
 }) {
   const router = useRouter();
@@ -66,6 +70,9 @@ export function WorkspaceMembers({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [inviteRole, setInviteRole] = useState<"admin" | "member">("member");
   const [search, setSearch] = useState("");
+  const [note, setNote] = useState("");
+  const [pasted, setPasted] = useState("");
+  const [unmatched, setUnmatched] = useState<string[]>([]);
   const [memberSearch, setMemberSearch] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -116,15 +123,35 @@ export function WorkspaceMembers({
   async function sendInvites() {
     const ids = [...selected];
     const ok = await run(
-      () => inviteMembersAction({ workspaceId: workspace.id, userIds: ids, role: inviteRole }),
+      () => inviteMembersAction({ workspaceId: workspace.id, userIds: ids, role: inviteRole, message: note }),
       `Invitation${ids.length === 1 ? "" : "s"} sent. People join once they accept.`,
     );
     if (ok) {
       setSelected(new Set());
       setSearch("");
+      setNote("");
+      setPasted("");
+      setUnmatched([]);
       setInviteOpen(false);
       setTab("pending");
     }
+  }
+
+  /** Selects everyone whose email is in the pasted text (commas, spaces or new lines). */
+  function selectPasted() {
+    const emails = [...new Set((pasted.toLowerCase().match(/[^\s,;<>"']+@[^\s,;<>"']+/g) ?? []).map((email) => email.trim()))];
+    const byEmail = new Map(invitable.map((user) => [user.email.toLowerCase(), user.id]));
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const email of emails) {
+        const id = byEmail.get(email);
+        if (id) {
+          next.add(id);
+        }
+      }
+      return next;
+    });
+    setUnmatched(emails.filter((email) => !byEmail.has(email)));
   }
 
   function toggle(id: string) {
@@ -158,7 +185,7 @@ export function WorkspaceMembers({
             People in {workspace.name}. Only members can be added to its sheets.
           </p>
         </div>
-        {canManage ? (
+        {canInvite ? (
           <button
             type="button"
             className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-white"
@@ -181,7 +208,7 @@ export function WorkspaceMembers({
         </p>
       ) : null}
 
-      {inviteOpen && canManage ? (
+      {inviteOpen && canInvite ? (
         <section aria-label="Invite people" className="mt-5 rounded-lg border border-border bg-surface p-4">
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border px-2 py-1.5">
@@ -202,7 +229,7 @@ export function WorkspaceMembers({
               onChange={(event) => setInviteRole(event.target.value as "admin" | "member")}
             >
               <option value="member">Invite as Member</option>
-              <option value="admin">Invite as Admin</option>
+              {canManage ? <option value="admin">Invite as Admin</option> : null}
             </select>
             <button
               type="button"
@@ -213,6 +240,43 @@ export function WorkspaceMembers({
               {selected.size > 0 ? `Send ${selected.size} invite${selected.size === 1 ? "" : "s"}` : "Send invites"}
             </button>
           </div>
+          <details className="mt-3 text-sm">
+            <summary className="cursor-pointer text-muted hover:text-text">Paste a list of emails</summary>
+            <div className="mt-2 flex flex-wrap items-start gap-2">
+              <textarea
+                value={pasted}
+                rows={3}
+                placeholder="sara@company.com, omar@company.com"
+                aria-label="Emails to invite"
+                className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1.5 text-sm outline-none focus:border-primary"
+                onChange={(event) => setPasted(event.target.value)}
+              />
+              <button
+                type="button"
+                className="cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm hover:bg-bg"
+                onClick={selectPasted}
+              >
+                Select them
+              </button>
+            </div>
+            {unmatched.length > 0 ? (
+              <p className="mt-1 text-xs text-muted">
+                Not found or already in the workspace: {unmatched.join(", ")}. An admin can create accounts in Users.
+              </p>
+            ) : null}
+          </details>
+          <label className="mt-3 block text-sm">
+            <span className="mb-1 block text-xs font-medium text-muted">Personal note (optional)</span>
+            <textarea
+              value={note}
+              rows={2}
+              maxLength={500}
+              dir="auto"
+              placeholder="Why you're inviting them, what to look at first…"
+              className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm outline-none focus:border-primary"
+              onChange={(event) => setNote(event.target.value)}
+            />
+          </label>
           <ul className="mt-3 max-h-64 space-y-0.5 overflow-auto">
             {candidates.map((user) => (
               <li key={user.id}>
@@ -348,9 +412,26 @@ export function WorkspaceMembers({
                 <span className="block truncate text-xs text-muted">
                   {invitation.email} · invited as {ROLE_LABEL[invitation.role]}
                   {invitation.invitedByName ? ` by ${invitation.invitedByName}` : ""}
+                  {invitation.workbookName ? ` · with sheet ${invitation.workbookName}` : ""}
                 </span>
               </span>
-              <span className="rounded-full bg-bg px-2 py-0.5 text-xs text-muted">Waiting to accept</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs ${invitation.expired ? "bg-danger/10 text-danger" : "bg-bg text-muted"}`}
+                title={`Expires ${new Date(invitation.expiresAt).toLocaleString()}`}
+              >
+                {invitation.expired
+                  ? "Expired"
+                  : `Expires ${new Date(invitation.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}
+              </span>
+              <button
+                type="button"
+                aria-label={`Resend invitation to ${invitation.fullName}`}
+                disabled={pending}
+                className="cursor-pointer rounded-md px-2 py-1 text-sm text-primary hover:bg-primary/10 disabled:opacity-60"
+                onClick={() => void run(() => resendInvitationAction({ invitationId: invitation.id }), "Invitation sent again.")}
+              >
+                Resend
+              </button>
               <button
                 type="button"
                 aria-label={`Cancel invitation for ${invitation.fullName}`}

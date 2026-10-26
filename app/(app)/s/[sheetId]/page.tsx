@@ -27,7 +27,7 @@ export default async function SheetPage({
         sheetId={sheet.id}
         workbookId={sheet.workbookId}
         workbookName={sheet.workbookName}
-        me={{ id: user.id, role: user.role, viewOnly: access.role === "viewer" }}
+        me={{ id: user.id, role: user.role, viewOnly: access.role === "viewer", assignedOnly: access.role === "assigned" }}
       />
     </Suspense>
   );

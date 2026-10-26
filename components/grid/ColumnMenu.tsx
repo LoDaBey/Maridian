@@ -37,6 +37,7 @@ import { StatusOptionsEditor, type StatusDraft } from "./StatusOptionsEditor";
 import { ProtectDialog } from "./ProtectDialog";
 import { useIsProtected, useProtection } from "./ProtectionContext";
 import { readFillColor } from "@/lib/sheets/values";
+import { ConditionalFormatDialog } from "./ConditionalFormatDialog";
 
 export const COLUMN_TYPE_OPTIONS: Array<{ type: ColumnType; label: string; icon: LucideIcon }> = [
   { type: "text", label: "Text", icon: Type },
@@ -142,6 +143,7 @@ export function ColumnMenu({
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [fillOpen, setFillOpen] = useState<"header" | "cells" | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const multiple = settings.multiple === true;
   const headerColor = readFillColor(settings, "headerColor");
   const fillColor = readFillColor(settings, "fillColor");
@@ -273,6 +275,27 @@ export function ColumnMenu({
           <>
             <MenuItem label="Header color" onSelect={() => setFillOpen("header")} />
             <MenuItem label="Cell color" onSelect={() => setFillOpen("cells")} />
+            <MenuItem
+              label="Conditional formatting…"
+              onSelect={() => {
+                closeAll();
+                setRulesOpen(true);
+              }}
+            />
+            <MenuItem
+              label={settings.frozen === true ? "Unfreeze columns" : "Freeze up to this column"}
+              onSelect={() => {
+                const state = store.getState();
+                // Only one column carries the mark; everything before it is frozen too.
+                for (const id of state.columnOrder) {
+                  if (id !== columnId && state.columns[id]?.settings.frozen === true) {
+                    onCommit("column.update", { columnId: id, patch: { settings: { frozen: null } } });
+                  }
+                }
+                onCommit("column.update", { columnId, patch: { settings: { frozen: settings.frozen === true ? null : true } } });
+                closeAll();
+              }}
+            />
           </>
         ) : null}
         {protection.canManage ? (
@@ -317,6 +340,17 @@ export function ColumnMenu({
           }}
         />
       </Menu>
+      {rulesOpen ? (
+        <ConditionalFormatDialog
+          name={name}
+          settings={settings}
+          onClose={() => setRulesOpen(false)}
+          onSave={(rules) => {
+            onCommit("column.update", { columnId, patch: { settings: { rules: rules.length > 0 ? rules : null } } });
+            setRulesOpen(false);
+          }}
+        />
+      ) : null}
       {protectOpen ? (
         <ProtectDialog
           sheetId={store.getState().sheet.id}

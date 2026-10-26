@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   getWorkbookShareState,
+  inviteToSheet,
   setWorkbookMemberAccess,
   shareWorkbook,
   unshareWorkbook,
@@ -10,11 +11,12 @@ import {
 } from "@/app/(app)/sheets/actions";
 import type { WorkbookMember } from "@/lib/db-types";
 
-type Access = "editor" | "viewer";
+type Access = "editor" | "assigned" | "viewer";
 
 const ACCESS_LABEL: Record<WorkbookMember["boardRole"], string> = {
   owner: "Owner",
   editor: "Can edit",
+  assigned: "Edits assigned items",
   viewer: "Can view",
 };
 
@@ -35,6 +37,9 @@ export function ShareWorkbookDialog({
   const [query, setQuery] = useState("");
   const [members, setMembers] = useState<WorkbookMember[]>([]);
   const [users, setUsers] = useState<ShareCandidate[]>([]);
+  const [outsiders, setOutsiders] = useState<ShareCandidate[]>([]);
+  const [invited, setInvited] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState("");
   const [newAccess, setNewAccess] = useState<Access>("editor");
   const [workspaceName, setWorkspaceName] = useState("");
   const [canShare, setCanShare] = useState(false);
@@ -74,6 +79,7 @@ export function ShareWorkbookDialog({
       }
       setMembers(state.members);
       setUsers(state.users);
+      setOutsiders(state.outsiders);
       setCanShare(state.canShare);
       setTitle(state.workbookName || workbookName);
       setWorkspaceName(state.workspaceName);
@@ -122,6 +128,24 @@ export function ShareWorkbookDialog({
       setMembers(state.members);
       setUsers(state.users);
       setQuery("");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function inviteOutsider(userId: string) {
+    if (!canShare || pending) {
+      return;
+    }
+    setPending(true);
+    setError("");
+    try {
+      const result = await inviteToSheet({ workbookId, userIds: [userId], role: newAccess, message: note });
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setInvited((current) => new Set(current).add(userId));
     } finally {
       setPending(false);
     }
@@ -229,6 +253,7 @@ export function ShareWorkbookDialog({
                         onChange={(event) => void changeAccess(member.userId, event.target.value as Access)}
                       >
                         <option value="editor">Can edit</option>
+                        <option value="assigned">Edits assigned items</option>
                         <option value="viewer">Can view</option>
                       </select>
                     ) : (
@@ -259,6 +284,7 @@ export function ShareWorkbookDialog({
                       onChange={(event) => setNewAccess(event.target.value as Access)}
                     >
                       <option value="editor">Can edit</option>
+                      <option value="assigned">Edits assigned items</option>
                       <option value="viewer">Can view</option>
                     </select>
                   </div>
@@ -266,7 +292,7 @@ export function ShareWorkbookDialog({
                     <p className="px-1 py-2 text-muted">
                       {needle
                         ? "No people match."
-                        : "Everyone in this workspace already has access. Invite more people to the workspace first."}
+                        : "Everyone in this workspace already has access. Search a name to invite someone from outside."}
                     </p>
                   ) : (
                     <ul className="space-y-1">
@@ -296,6 +322,57 @@ export function ShareWorkbookDialog({
                       ))}
                     </ul>
                   )}
+                  {needle && outsiders.length > 0 ? (
+                    <div className="mt-3 border-t border-border pt-3">
+                      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
+                        Not in {workspaceName || "this workspace"} yet
+                      </p>
+                      <p className="mb-2 text-xs text-muted">
+                        They get an invitation to the workspace; accepting opens this sheet with the access above.
+                      </p>
+                      <input
+                        value={note}
+                        maxLength={500}
+                        dir="auto"
+                        aria-label="Note for the invitation"
+                        placeholder="Add a note (optional)"
+                        className="mb-2 w-full rounded border border-border px-2 py-1 text-xs outline-none"
+                        onChange={(event) => setNote(event.target.value)}
+                      />
+                      <ul className="space-y-1">
+                        {outsiders
+                          .filter((user) => user.fullName.toLowerCase().includes(needle) || user.email.toLowerCase().includes(needle))
+                          .slice(0, 8)
+                          .map((user) => (
+                            <li key={user.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5">
+                              <span
+                                className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] text-white"
+                                style={{ backgroundColor: user.avatarColor }}
+                              >
+                                {(user.fullName[0] ?? "?").toUpperCase()}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate">{user.fullName}</span>
+                                <span className="block truncate text-[11px] text-muted">{user.email}</span>
+                              </span>
+                              {invited.has(user.id) ? (
+                                <span className="text-xs text-success">Invited</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  aria-label={`Invite ${user.fullName} to the workspace and this sheet`}
+                                  disabled={pending}
+                                  className="cursor-pointer rounded-md border border-border px-2 py-1 text-xs hover:bg-bg disabled:opacity-60"
+                                  onClick={() => void inviteOutsider(user.id)}
+                                >
+                                  Invite
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                      </ul>
+                    </div>
+                  ) : null}
                 </>
               ) : null}
             </>

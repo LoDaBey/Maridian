@@ -21,8 +21,8 @@ export function InvitationList({ invitations }: { invitations: MyInvitation[] })
         router.refresh();
         return;
       }
-      if (accept && result.id) {
-        router.push(`/w/${result.id}`);
+      if (accept && result.href) {
+        router.push(result.href);
       }
       router.refresh();
     } finally {
@@ -52,11 +52,28 @@ export function InvitationList({ invitations }: { invitations: MyInvitation[] })
               <p className="truncate font-medium">{invitation.workspaceName}</p>
               <p className="text-muted">
                 {invitation.invitedByName ?? "Someone"} invited you as{" "}
-                {invitation.role === "admin" ? "an admin" : "a member"} ·{" "}
+                {invitation.role === "admin" ? "an admin" : "a member"}
+                {invitation.workbookName ? (
+                  <>
+                    {" "}
+                    and to the sheet <span dir="auto" className="font-medium text-text">{invitation.workbookName}</span>
+                  </>
+                ) : null}{" "}
+                ·{" "}
                 {new Date(invitation.createdAt).toLocaleDateString("en-US", {
                   month: "short",
                   day: "numeric",
                 })}
+              </p>
+              {invitation.message ? (
+                <p dir="auto" className="mt-2 whitespace-pre-wrap rounded-md border-s-2 border-primary bg-bg px-3 py-1.5 text-text">
+                  {invitation.message}
+                </p>
+              ) : null}
+              <p className={`mt-1 text-xs ${invitation.expired ? "text-danger" : "text-muted"}`}>
+                {invitation.expired
+                  ? "Expired. Ask the person who invited you to resend it."
+                  : `Expires ${new Date(invitation.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}
               </p>
             </div>
             <div className="flex gap-2">
@@ -72,7 +89,7 @@ export function InvitationList({ invitations }: { invitations: MyInvitation[] })
               <button
                 type="button"
                 aria-label={`Accept invitation to ${invitation.workspaceName}`}
-                disabled={busyId !== null}
+                disabled={busyId !== null || invitation.expired}
                 className="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
                 onClick={() => void respond(invitation, true)}
               >

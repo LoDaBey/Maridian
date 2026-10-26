@@ -8,7 +8,7 @@ import { query } from "@/lib/db";
 import { tx } from "@/lib/db";
 import { insertNotifications } from "@/lib/notifications/repo";
 import { emitToUser } from "@/lib/realtime/emit";
-import { getWorkspace } from "@/lib/workspaces/repo";
+import { getWorkspace, inviteToWorkspace, WorkspaceActionError } from "@/lib/workspaces/repo";
 import { broadcastSheetMeta, broadcastSheetsChanged } from "@/lib/realtime/socket-server";
 import {
   archiveSheetRecord,
@@ -40,6 +40,7 @@ import {
   userCanAccessWorkbook,
 } from "@/lib/sheets/workbook-access";
 import { listDirectoryUsers } from "@/lib/users";
+import { announceInvitations } from "@/lib/workspaces/announce";
 
 export interface SheetMutationResult {
   error: string;
@@ -432,7 +433,7 @@ export async function purgeWorkbook(input: { id: string }): Promise<SheetMutatio
   }
 }
 
-const boardRoleSchema = z.enum(["editor", "viewer"]);
+const boardRoleSchema = z.enum(["editor", "assigned", "viewer"]);
 
 const shareSchema = z.object({
   workbookId: z.uuid("Sheet not found."),
@@ -459,11 +460,13 @@ export async function getWorkbookShareState(input: { workbookId: string }): Prom
   error: string;
   members: WorkbookMember[];
   users: ShareCandidate[];
+  /** People outside the workspace; sharing with them sends a workspace invitation. */
+  outsiders: ShareCandidate[];
   canShare: boolean;
   workbookName: string;
   workspaceName: string;
 }> {
-  const empty = { members: [], users: [], canShare: false, workbookName: "", workspaceName: "" };
+  const empty = { members: [], users: [], outsiders: [], canShare: false, workbookName: "", workspaceName: "" };
   const actor = await requireUser();
   const parsed = z.object({ workbookId: z.uuid("Sheet not found.") }).safeParse(input);
   if (!parsed.success) {
@@ -473,7 +476,7 @@ export async function getWorkbookShareState(input: { workbookId: string }): Prom
   if (!access) {
     return { error: "You don't have access to this sheet.", ...empty };
   }
-  const [meta, members, candidates] = await Promise.all([
+  const [meta, members, candidates, outsiders] = await Promise.all([
     query<{ name: string; workspace_name: string }>(
       `SELECT w.name, ws.name AS workspace_name
        FROM monitor_workbooks w JOIN monitor_workspaces ws ON ws.id = w.workspace_id
@@ -492,16 +495,28 @@ export async function getWorkbookShareState(input: { workbookId: string }): Prom
        ORDER BY u.full_name`,
       [access.workspaceId, parsed.data.workbookId],
     ),
+    access.canShare
+      ? query<{ id: string; full_name: string; email: string; avatar_color: string }>(
+          `SELECT u.id, u.full_name, u.email, u.avatar_color
+           FROM monitor_users u
+           WHERE u.is_active = true
+             AND NOT EXISTS (SELECT 1 FROM monitor_workspace_members wm WHERE wm.workspace_id = $1 AND wm.user_id = u.id)
+           ORDER BY u.full_name`,
+          [access.workspaceId],
+        )
+      : Promise.resolve([]),
   ]);
+  const toCandidate = (row: { id: string; full_name: string; email: string; avatar_color: string }) => ({
+    id: row.id,
+    fullName: row.full_name,
+    email: row.email,
+    avatarColor: row.avatar_color,
+  });
   return {
     error: "",
     members,
-    users: candidates.map((row) => ({
-      id: row.id,
-      fullName: row.full_name,
-      email: row.email,
-      avatarColor: row.avatar_color,
-    })),
+    users: candidates.map(toCandidate),
+    outsiders: outsiders.map(toCandidate),
     canShare: access.canShare,
     workbookName: meta[0]?.name ?? "",
     workspaceName: meta[0]?.workspace_name ?? "",
@@ -531,7 +546,7 @@ async function notifyAccessChanged(userId: string, workbookId: string, revoked: 
 export async function shareWorkbook(input: {
   workbookId: string;
   userIds: string[];
-  role?: "editor" | "viewer";
+  role?: "editor" | "assigned" | "viewer";
 }): Promise<{ error: string }> {
   const actor = await requireUser();
   const parsed = shareSchema.safeParse(input);
@@ -580,10 +595,58 @@ export async function shareWorkbook(input: {
   return { error: "" };
 }
 
+/** Shares a sheet with people outside its workspace: they get a workspace invitation that opens the sheet. */
+export async function inviteToSheet(input: {
+  workbookId: string;
+  userIds: string[];
+  role?: "editor" | "assigned" | "viewer";
+  message?: string;
+}): Promise<{ error: string; invited?: number }> {
+  const actor = await requireUser();
+  const parsed = shareSchema.extend({ message: z.string().trim().max(500).default("") }).safeParse(input);
+  if (!parsed.success) {
+    return { error: fieldError(parsed.error) };
+  }
+  const denied = await requireShareAccess(actor, parsed.data.workbookId);
+  if (denied) {
+    return { error: denied };
+  }
+  const access = await getWorkbookAccess(actor, parsed.data.workbookId);
+  if (!access) {
+    return { error: "You don't have access to this sheet." };
+  }
+  try {
+    const invited = await inviteToWorkspace({
+      actor,
+      workspaceId: access.workspaceId,
+      userIds: parsed.data.userIds,
+      role: "member",
+      message: parsed.data.message,
+      workbookId: parsed.data.workbookId,
+      boardRole: parsed.data.role,
+      allowSheetSharer: true,
+    });
+    await announceInvitations({
+      actor,
+      workspaceId: access.workspaceId,
+      userIds: invited,
+      message: parsed.data.message,
+      workbookId: parsed.data.workbookId,
+    });
+    revalidatePath("/", "layout");
+    return { error: "", invited: invited.length };
+  } catch (error) {
+    if (error instanceof WorkspaceActionError) {
+      return { error: error.message };
+    }
+    throw error;
+  }
+}
+
 export async function setWorkbookMemberAccess(input: {
   workbookId: string;
   userId: string;
-  role: "editor" | "viewer";
+  role: "editor" | "assigned" | "viewer";
 }): Promise<{ error: string }> {
   const actor = await requireUser();
   const parsed = memberRoleSchema.safeParse(input);

@@ -106,6 +106,23 @@ export function reconcileSpec(spec: ChartSpec, columns: ColumnRef[]): ChartSpec 
 
 const field = "w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm outline-none focus:border-primary";
 
+/** The same chart as another kind, with a group-by column that suits that kind. */
+export function withKind(spec: ChartSpec, kind: ChartKind, columns: ColumnRef[]): ChartSpec {
+  const groupable = columns.filter((column) =>
+    spec.kind === "time" ? DATE_TYPES.has(column.type) : GROUPABLE_TYPES.has(column.type),
+  );
+  const dates = columns.filter((column) => DATE_TYPES.has(column.type));
+  if (kind === "time") {
+    const groupBy = spec.groupBy && DATE_TYPES.has(spec.groupBy.type) ? spec.groupBy : (dates[0] ?? null);
+    return { ...spec, kind, groupBy };
+  }
+  if (kind !== "number" && spec.groupBy && DATE_TYPES.has(spec.groupBy.type) && kind !== "bar") {
+    const groupBy = columns.find((column) => GROUPABLE_TYPES.has(column.type) && !DATE_TYPES.has(column.type));
+    return { ...spec, kind, groupBy: groupBy ?? spec.groupBy };
+  }
+  return { ...spec, kind, groupBy: spec.groupBy ?? groupable[0] ?? null };
+}
+
 export function ChartSettings({
   spec,
   columns,
@@ -123,17 +140,7 @@ export function ChartSettings({
   const metricKey = spec.metric.op === "count" ? "count" : `${spec.metric.op}|${refKey(spec.metric.column)}`;
 
   function setKind(kind: ChartKind) {
-    if (kind === "time") {
-      const groupBy = spec.groupBy && DATE_TYPES.has(spec.groupBy.type) ? spec.groupBy : (dates[0] ?? null);
-      onChange({ ...spec, kind, groupBy });
-      return;
-    }
-    if (kind !== "number" && spec.groupBy && DATE_TYPES.has(spec.groupBy.type) && kind !== "bar") {
-      const groupBy = columns.find((column) => GROUPABLE_TYPES.has(column.type) && !DATE_TYPES.has(column.type));
-      onChange({ ...spec, kind, groupBy: groupBy ?? spec.groupBy });
-      return;
-    }
-    onChange({ ...spec, kind, groupBy: spec.groupBy ?? groupable[0] ?? null });
+    onChange(withKind(spec, kind, columns));
   }
 
   return (

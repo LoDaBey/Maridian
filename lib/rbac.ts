@@ -44,7 +44,10 @@ export type Action =
   | "sheet.purge"
   | "template.delete"
   | "workspace.create"
-  | "workspace.manage_all";
+  | "workspace.manage_all"
+  | "dashboard.manage"
+  | "workspace.invite"
+  | "team.manage";
 
 /** Lowest role allowed to perform the action. Every higher role is allowed too. */
 export const MIN_ROLE: Record<Action, Role> = {
@@ -59,21 +62,25 @@ export const MIN_ROLE: Record<Action, Role> = {
   "row.move": "team_leader",
   "column.resize": "team_leader",
   "history.view": "team_leader",
-  "sheet.create": "employee",
+  "sheet.create": "team_leader",
   "sheet.rename": "project_manager",
   "sheet.duplicate": "employee",
   "sheet.reorder": "project_manager",
   "sheet.direction": "project_manager",
-  "column.manage": "employee",
-  "column.delete": "employee",
+  "column.manage": "team_leader",
+  "column.delete": "team_leader",
   "csv.import": "project_manager",
-  "sheet.archive": "employee",
+  "sheet.archive": "team_leader",
   "sheet.restore": "employee",
   "user.manage": "admin",
   "sheet.purge": "admin",
   "template.delete": "admin",
   "workspace.create": "project_manager",
   "workspace.manage_all": "admin",
+  "dashboard.manage": "project_manager",
+  /** Invite people to a workspace you belong to (owners and admins can always invite). */
+  "workspace.invite": "project_manager",
+  "team.manage": "operations_manager",
 };
 
 export function can(role: Role, action: Action): boolean {

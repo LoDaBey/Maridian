@@ -50,7 +50,7 @@ export type SettingsResult =
   | { ok: true; settings: Record<string, JsonValue> }
   | { ok: false; error: string };
 
-export const APPEARANCE_KEYS = ["headerColor", "fillColor"] as const;
+export const APPEARANCE_KEYS = ["headerColor", "fillColor", "frozen", "rules"] as const;
 
 export function normalizeSettings(type: ColumnType, settings: unknown): SettingsResult {
   if (type === "status" || type === "dropdown") {
@@ -886,12 +886,25 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isAppearanceKey(key: string): boolean {
-  return key === "headerColor" || key === "fillColor";
+  return (APPEARANCE_KEYS as readonly string[]).includes(key);
 }
 
 function readAppearance(settings: Record<string, unknown>): SettingsResult {
   const next: Record<string, JsonValue> = {};
-  for (const key of APPEARANCE_KEYS) {
+  // Columns up to the one marked "frozen" stay in view while scrolling sideways.
+  if (settings.frozen === true) {
+    next.frozen = true;
+  }
+  if (settings.rules !== undefined && settings.rules !== null) {
+    const rules = parseRules(settings.rules);
+    if (!rules) {
+      return { ok: false, error: "Check the conditional formatting rules." };
+    }
+    if (rules.length > 0) {
+      next.rules = rules;
+    }
+  }
+  for (const key of ["headerColor", "fillColor"] as const) {
     if (!(key in settings)) {
       continue;
     }
@@ -904,6 +917,45 @@ function readAppearance(settings: Record<string, unknown>): SettingsResult {
     }
   }
   return { ok: true, settings: next };
+}
+
+export const RULE_OPS = ["eq", "neq", "contains", "not_contains", "gt", "lt", "between", "empty", "not_empty"] as const;
+export type RuleOp = (typeof RULE_OPS)[number];
+
+/** Conditional formatting: the first matching rule paints the cell. */
+export interface FormatRule {
+  op: RuleOp;
+  value?: string;
+  value2?: string;
+  color: string;
+}
+
+function parseRules(value: unknown): JsonValue[] | null {
+  if (!Array.isArray(value) || value.length > 10) {
+    return null;
+  }
+  const rules: JsonValue[] = [];
+  for (const raw of value) {
+    if (!isPlainObject(raw) || !(RULE_OPS as readonly string[]).includes(String(raw.op))) {
+      return null;
+    }
+    const fill = parseFill(raw.color);
+    if (!fill.ok || !fill.color) {
+      return null;
+    }
+    const text = (input: unknown) => (typeof input === "string" || typeof input === "number" ? String(input).slice(0, 200) : undefined);
+    const rule: Record<string, JsonValue> = { op: String(raw.op), color: fill.color };
+    const first = text(raw.value);
+    const second = text(raw.value2);
+    if (first !== undefined) {
+      rule.value = first;
+    }
+    if (second !== undefined) {
+      rule.value2 = second;
+    }
+    rules.push(rule);
+  }
+  return rules;
 }
 
 function parseFill(value: unknown): { ok: true; color?: string } | { ok: false } {
@@ -921,8 +973,9 @@ function stripAppearance(settings: unknown): Record<string, unknown> {
     return {};
   }
   const rest = { ...settings };
-  delete rest.headerColor;
-  delete rest.fillColor;
+  for (const key of APPEARANCE_KEYS) {
+    delete rest[key];
+  }
   return rest;
 }
 

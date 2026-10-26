@@ -53,8 +53,7 @@ export function NotificationBell() {
                     onOpen={() => {
                       void markRead([item.id]);
                       setOpen(false);
-                      const href = item.rowId ? `/s/${item.sheetId}?item=${item.rowId}` : `/s/${item.sheetId}`;
-                      router.push(href);
+                      router.push(item.href);
                     }}
                   />
                 </li>

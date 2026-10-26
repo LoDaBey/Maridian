@@ -52,6 +52,8 @@ export function useViewState(sheetId: string): SheetView & {
   setToday: (today: boolean) => void;
   setFilterActive: (filterActive: boolean) => void;
   clear: () => void;
+  /** Replace the whole view (a saved view being applied). */
+  apply: (view: Partial<SheetView>) => void;
 } {
   const view = useSyncExternalStore(subscribe, () => getSnapshot(sheetId), () => EMPTY_VIEW);
   const actions = useMemo(
@@ -73,6 +75,7 @@ export function useViewState(sheetId: string): SheetView & {
         });
       },
       clear: () => update(sheetId, EMPTY_VIEW),
+      apply: (view: Partial<SheetView>) => update(sheetId, { ...EMPTY_VIEW, ...view }),
     }),
     [sheetId],
   );

@@ -5,9 +5,10 @@ import type { NotificationItem, NotificationType } from "@/lib/db-types";
 export interface PendingNotification {
   userId: string;
   type: NotificationType;
-  sheetId: string;
+  sheetId: string | null;
   rowId: string | null;
   actorId: string | null;
+  /** `href` and `title` override the default sheet link and sheet name. */
   payload: Record<string, unknown>;
 }
 
@@ -27,7 +28,7 @@ export async function insertNotifications(
       id: string;
       user_id: string;
       type: NotificationType;
-      sheet_id: string;
+      sheet_id: string | null;
       row_id: string | null;
       actor_id: string | null;
       payload: Record<string, unknown>;
@@ -58,7 +59,7 @@ export async function listNotifications(userId: string, limit = 40): Promise<Not
     id: string;
     user_id: string;
     type: NotificationType;
-    sheet_id: string;
+    sheet_id: string | null;
     row_id: string | null;
     actor_id: string | null;
     payload: Record<string, unknown>;
@@ -116,7 +117,7 @@ function mapNotification(row: {
   id: string;
   user_id: string;
   type: NotificationType;
-  sheet_id: string;
+  sheet_id: string | null;
   row_id: string | null;
   actor_id: string | null;
   payload: Record<string, unknown>;
@@ -135,8 +136,14 @@ function mapNotification(row: {
     actorId: row.actor_id,
     actorName: row.actor_name ?? "Someone",
     actorColor: row.actor_color ?? "#0073ea",
-    sheetName: row.sheet_name ?? "Sheet",
+    sheetName: typeof row.payload.title === "string" ? row.payload.title : (row.sheet_name ?? "Sheet"),
     excerpt: excerptOf(row.type, row.payload),
+    href:
+      typeof row.payload.href === "string" && row.payload.href.startsWith("/")
+        ? row.payload.href
+        : row.row_id
+          ? `/s/${row.sheet_id}?item=${row.row_id}`
+          : `/s/${row.sheet_id}`,
     createdAt: row.created_at.toISOString(),
     readAt: row.read_at ? row.read_at.toISOString() : null,
   };
@@ -161,6 +168,12 @@ function excerptOf(type: NotificationType, payload: Record<string, unknown>): st
   }
   if (type === "share") {
     return "shared a sheet with you";
+  }
+  if (type === "invitation") {
+    return "invited you to a workspace";
+  }
+  if (type === "access_request") {
+    return "asked for access";
   }
   return "changed a status";
 }

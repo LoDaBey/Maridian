@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CalendarDays, Download, Filter, History, Import, Share2, SortAsc, UserRound } from "lucide-react";
 import { useStore } from "zustand";
+import { useSearchParams } from "next/navigation";
 import { ShareWorkbookDialog } from "@/app/(app)/_components/ShareWorkbookDialog";
 import { ImportDialog } from "@/app/(app)/s/[sheetId]/_components/ImportDialog";
 import { ActivityDrawer } from "@/components/history/ActivityDrawer";
@@ -34,6 +35,7 @@ export function Toolbar({
   onClear,
   filterActive,
   onFilterActive,
+  views,
 }: {
   direction: "ltr" | "rtl";
   columns: Array<{ id: string; name: string; type: ColumnType; settings: Record<string, JsonValue> }>;
@@ -54,6 +56,8 @@ export function Toolbar({
   onClear: () => void;
   filterActive: boolean;
   onFilterActive: (value: boolean) => void;
+  /** Saved views menu, rendered beside search. */
+  views?: ReactNode;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const store = useSheetStore();
@@ -65,7 +69,9 @@ export function Toolbar({
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [shareOpen, setShareOpen] = useState(false);
+  // "?share=1" (from an access request notification) opens sharing straight away.
+  const searchParams = useSearchParams();
+  const [shareOpen, setShareOpen] = useState(() => searchParams.get("share") === "1");
   const canHistory = canDo(me, "history.view");
   const [exportError, setExportError] = useState("");
   const active = Boolean(search.trim() || filters.length || sort || mine || today);
@@ -160,6 +166,7 @@ export function Toolbar({
           }
         }}
       />
+      {views}
       <Tooltip label="Filter">
         <button
           type="button"

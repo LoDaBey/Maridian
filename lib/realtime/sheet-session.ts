@@ -7,9 +7,12 @@ import type { SheetDirection } from "@/lib/db-types";
 import { getSocket } from "@/lib/realtime/client";
 import { applyOpToState, type LocalColumn, type LocalRow, type LocalSheetState } from "@/lib/sheets/apply-local";
 import type { JsonValue, SheetOp } from "@/lib/sheets/ops";
+import { unpackRows, type PackedRows } from "@/lib/sheets/snapshot-pack";
 import { createSheetStore, useSheetStore, type PendingOp, type SheetState, type SyncStatus } from "@/stores/sheet-store";
 
 const ACK_MS = 10_000;
+/** Joining a 100k-row tab can take a while on a slow connection. */
+const JOIN_ACK_MS = 60_000;
 const GAP_MS = 1_500;
 const RATE_MS = 500;
 
@@ -101,6 +104,7 @@ export function openSheet(sheetId: string, options?: { userId?: string }): Store
       }
       socket.off("op:applied", onApplied);
       socket.off("sheet:meta", onMeta);
+      socket.off("sheet:reset", onReset);
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       window.removeEventListener("beforeunload", onBeforeUnload);
@@ -124,6 +128,7 @@ export function openSheet(sheetId: string, options?: { userId?: string }): Store
 
   socket.on("op:applied", onApplied);
   socket.on("sheet:meta", onMeta);
+  socket.on("sheet:reset", onReset);
   socket.on("connect", onConnect);
   socket.on("disconnect", onDisconnect);
   window.addEventListener("beforeunload", onBeforeUnload);
@@ -377,6 +382,13 @@ export function openSheet(sheetId: string, options?: { userId?: string }): Store
       ...localFields(data),
       version: event.version,
     });
+  }
+
+  /** The whole tab changed underneath us (a version was restored): load it again. */
+  function onReset(payload: unknown): void {
+    if (isRecord(payload) && payload.sheetId === sheetId && !disposed) {
+      void resync();
+    }
   }
 
   function onMeta(payload: unknown): void {
@@ -653,7 +665,7 @@ function emitAck(
   payload: unknown,
 ): Promise<JoinAck | null> {
   return new Promise((resolve) => {
-    socket.timeout(ACK_MS).emit(event, payload, (error: Error | null, result?: unknown) => {
+    socket.timeout(JOIN_ACK_MS).emit(event, payload, (error: Error | null, result?: unknown) => {
       if (error) {
         resolve(null);
         return;
@@ -715,7 +727,7 @@ function readSnapshot(value: unknown): ClientSnapshot | null {
       settings: isRecord(column.settings) ? (column.settings as Record<string, JsonValue>) : {},
     });
   }
-  const rows: ClientSnapshot["rows"] = [];
+  const rows: ClientSnapshot["rows"] = isRecord(value.packed) && Array.isArray(value.packed.rows) ? unpackRows(value.packed as unknown as PackedRows) : [];
   for (const row of value.rows) {
     if (!isRecord(row) || typeof row.id !== "string" || typeof row.position !== "string") {
       continue;

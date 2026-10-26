@@ -405,6 +405,9 @@ export function compareSortedIds(
   };
 }
 
+/** Each row's normalized text, kept until the row, its columns or the people list change. */
+const searchCache = new WeakMap<ViewRow, { columns: readonly ViewColumn[]; users: ReadonlyMap<string, string>; text: string }>();
+
 function rowMatchesSearch(
   row: ViewRow | undefined,
   columns: readonly ViewColumn[],
@@ -414,13 +417,17 @@ function rowMatchesSearch(
   if (!row) {
     return false;
   }
-  for (const column of columns) {
-    const text = normalizeSearchText(displayValue(column, row.data[column.id], usersById));
-    if (text.includes(query)) {
-      return true;
+  let cached = searchCache.get(row);
+  if (!cached || cached.columns !== columns || cached.users !== usersById) {
+    let text = "";
+    for (const column of columns) {
+      // The separator keeps a match from spanning two cells.
+      text += `${normalizeSearchText(displayValue(column, row.data[column.id], usersById))}\u0001`;
     }
+    cached = { columns, users: usersById, text };
+    searchCache.set(row, cached);
   }
-  return false;
+  return cached.text.includes(query);
 }
 
 function ruleReady(rule: FilterRule): boolean {

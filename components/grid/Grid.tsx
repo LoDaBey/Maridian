@@ -52,6 +52,10 @@ import { clearHistory, pushHistory, redoEntry, undoEntry } from "./undo";
 import { useDirectory } from "./useDirectory";
 import { useGridKeyboard } from "./useGridKeyboard";
 import { selectionBounds, useSelection } from "./useSelection";
+import { FindReplace } from "./FindReplace";
+import { SavedViews } from "./SavedViews";
+import { CellCommentsProvider } from "./CellComments";
+import { VersionHistory } from "./VersionHistory";
 
 const NO_ROWS: never[] = [];
 const NO_TABLE_STATE = {};
@@ -98,6 +102,7 @@ export function Grid({
   const nameColumnId = columns.find((column) => column.type === "text")?.id ?? columns[0]?.id;
   const rows = useStore(store, (state) => state.rows);
   const direction = useStore(store, (state) => state.sheet.direction);
+  const sheetName = useStore(store, (state) => state.sheet.name);
   const archived = useStore(store, (state) => state.archived);
   const { users } = useDirectory();
   const me = useMe();
@@ -195,6 +200,7 @@ export function Grid({
   const lockRef = useRef(isCellLocked);
   lockRef.current = isCellLocked;
   const [protectGroup, setProtectGroup] = useState<{ id: string; name: string } | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
   const canResize = canDo(me, "column.resize") && !archived;
   const canManage = canDo(me, "column.manage") && !archived;
   const canAddColumn = (canManage || canDo(me, "sheet.create")) && !archived;
@@ -232,6 +238,13 @@ export function Grid({
     return column.getSize();
   });
   const columnsWidth = GUTTER + widths.reduce((sum, width) => sum + width, 0);
+  // Columns up to the last one marked "frozen" stick after the row gutter.
+  const frozenCount = columns.reduce((last, column, index) => (column.settings.frozen === true ? index + 1 : last), 0);
+  const frozenStarts: number[] = [];
+  for (let index = 0, start = GUTTER; index < frozenCount; index += 1) {
+    frozenStarts.push(start);
+    start += widths[index] ?? columns[index]?.width ?? 0;
+  }
   const totalWidth = columnsWidth + (canAddColumn ? ADD_COLUMN_WIDTH : 0);
 
   const virtualizer = useVirtualizer({
@@ -741,6 +754,7 @@ export function Grid({
     onUndo: () => play(undoEntry(sheetId), "undo"),
     onRedo: () => play(redoEntry(sheetId), "redo"),
     onToggleCheckbox: toggleActiveCheckbox,
+    onFind: () => setFindOpen(true),
   });
 
   function targetGroupId(): string | undefined {
@@ -1100,6 +1114,7 @@ export function Grid({
       : "";
 
   return (
+    <CellCommentsProvider sheetId={sheetId} canResolve={!me.viewOnly && !archived}>
     <div className="flex h-full min-h-0 flex-col">
       <style>{`@keyframes presence-flash { 0%, 100% { box-shadow: inset 0 0 0 0 transparent; } 40% { box-shadow: inset 0 0 0 3px var(--primary); } } ::highlight(monitor-search) { background-color: #fdab3d; color: var(--text); }`}</style>
       <AvatarStack />
@@ -1132,6 +1147,20 @@ export function Grid({
           view.clear();
           setFilterNotice(false);
         }}
+        views={
+          <>
+          <SavedViews
+            sheetId={sheetId}
+            current={{ search: view.search, filters: view.filters, sort: view.sort, mine: view.mine, today: view.today }}
+            canSave={!me.viewOnly && !archived}
+            onApply={(saved) => {
+              view.apply(saved);
+              setFilterNotice(false);
+            }}
+          />
+          <VersionHistory sheetId={sheetId} tabName={sheetName} />
+          </>
+        }
       />
       <AnimatePresence mode="wait" initial={false}>
       <motion.div
@@ -1142,6 +1171,31 @@ export function Grid({
         exit={{ opacity: 0, y: -8 }}
         transition={{ duration: 0.2, ease: "easeOut" }}
       >
+      {findOpen && layout === "table" ? (
+        <div className="relative">
+          <FindReplace
+            rows={rows}
+            rowIds={rowIds}
+            columns={columns}
+            usersById={usersById}
+            canReplace={!readOnly && !me.assignedOnly}
+            isLocked={isCellLocked}
+            onGoTo={(match) => {
+              actions.current.selectCell(match.rowId, match.columnId, false);
+              const boardIndex = boardItemsRef.current.findIndex((item) => item.kind === "row" && item.rowId === match.rowId);
+              if (boardIndex >= 0) {
+                virtualizer.scrollToIndex(boardIndex, { align: "center" });
+              }
+              document.querySelector(`[role=gridcell][data-row-id="${match.rowId}"][data-column-id="${match.columnId}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+            }}
+            onReplace={(cells) => recordCells(cells)}
+            onClose={() => {
+              setFindOpen(false);
+              actions.current.focusGrid();
+            }}
+          />
+        </div>
+      ) : null}
       {layout === "chart" ? (
         <ChartView
           sheetId={sheetId}
@@ -1282,6 +1336,8 @@ export function Grid({
                         width={widths[index] ?? column.width}
                         selected={Boolean(selection?.kind === "column" && bounds && index >= bounds.colStart && index <= bounds.colEnd)}
                         settings={column.settings}
+                        stickyStart={frozenStarts[index]}
+                        lastFrozen={index === frozenCount - 1}
                         canResize={canResize}
                         canManage={canManage}
                         direction={direction}
@@ -1333,6 +1389,7 @@ export function Grid({
                       rows={groupRows.map((id) => store.getState().rows[id]).filter((row) => row !== undefined)}
                       gutter={GUTTER}
                       users={users}
+                      frozenStarts={frozenStarts}
                       label={board.kind === "sheet-summary" ? "All" : ""}
                     />
                   </div>
@@ -1371,7 +1428,7 @@ export function Grid({
                   style={{ height: ROW_SLOT, transform: `translateY(${item.start}px)`, width: totalWidth }}
                 >
                   <div
-                    className={`relative flex h-10 rounded-md ${edit?.rowId === rowId ? "overflow-visible" : "overflow-hidden"} ${unmatched.has(rowId) ? "bg-amber-500/15" : "bg-row"} hover:bg-row-hover`}
+                    className={`relative flex h-10 rounded-md ${edit?.rowId === rowId ? "overflow-visible" : "overflow-clip"} ${unmatched.has(rowId) ? "bg-amber-500/15" : "bg-row"} hover:bg-row-hover`}
                     title={unmatched.has(rowId) ? "Doesn't match filter" : undefined}
                   >
                     <span className="pointer-events-none absolute inset-y-0 start-0 w-1.5" style={{ backgroundColor: groupColor }} aria-hidden="true" />
@@ -1422,6 +1479,8 @@ export function Grid({
                       onInvalid={onInvalid}
                       onAddOption={onAddOption}
                       onOpenLink={onOpenLink}
+                      stickyStart={frozenStarts[index]}
+                      lastFrozen={index === frozenCount - 1}
                     />
                   ))}
                   </div>
@@ -1558,6 +1617,7 @@ export function Grid({
         </div>
       ) : null}
     </div>
+    </CellCommentsProvider>
   );
 }
 

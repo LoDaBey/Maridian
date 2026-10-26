@@ -2,6 +2,49 @@ import type { PoolClient } from "pg";
 import type { SheetOp } from "@/lib/sheets/ops";
 import type { LockView } from "@/lib/sheets/workbook-access";
 
+export const NOT_ASSIGNED = "You can only edit items assigned to you or your team.";
+
+/** Ops an "assigned only" member may send; anything structural is refused. */
+const ASSIGNED_OPS = new Set(["cell.set", "cells.setMany", "row.insert", "rows.insertMany", "row.delete", "row.restore"]);
+
+/**
+ * For "assigned only" members: rows they touch must be theirs, meaning created by them
+ * or with one of `people` in any person column. Team leaders pass their whole team.
+ */
+export async function assignedBlock(client: Pick<PoolClient, "query">, op: SheetOp, people: string[]): Promise<string | null> {
+  if (!ASSIGNED_OPS.has(op.type)) {
+    return NOT_ASSIGNED;
+  }
+  const rowIds =
+    op.type === "cell.set"
+      ? [op.payload.rowId]
+      : op.type === "cells.setMany"
+        ? [...new Set(op.payload.cells.map((cell) => cell.rowId))]
+        : op.type === "row.delete" || op.type === "row.restore"
+          ? op.payload.rowIds
+          : [];
+  if (rowIds.length === 0) {
+    return null;
+  }
+  const result = await client.query<{ id: string }>(
+    `SELECT r.id
+     FROM monitor_rows r
+     WHERE r.sheet_id = $1 AND r.id = ANY($2::uuid[])
+       AND NOT (
+         r.created_by = ANY($3::uuid[])
+         OR EXISTS (
+           SELECT 1 FROM monitor_columns c
+           WHERE c.sheet_id = r.sheet_id AND c.type = 'person' AND c.deleted_at IS NULL
+             AND jsonb_typeof(r.data -> (c.id::text)) = 'array'
+             AND (r.data -> (c.id::text)) ?| $3::text[]
+         )
+       )
+     LIMIT 1`,
+    [op.sheetId, rowIds, people],
+  );
+  return result.rows.length > 0 ? NOT_ASSIGNED : null;
+}
+
 export const TAB_LOCKED = "This tab is protected. Ask the sheet owner for edit access.";
 const GROUP_LOCKED = "This group is protected. Ask the sheet owner for edit access.";
 const COLUMN_LOCKED = "This column is protected. Ask the sheet owner for edit access.";

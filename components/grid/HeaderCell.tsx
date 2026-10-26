@@ -88,7 +88,12 @@ export function HeaderCell({
   onSort,
   canDelete,
   canStyle,
+  stickyStart,
+  lastFrozen,
 }: {
+  /** Frozen column: where it sticks while scrolling sideways. */
+  stickyStart?: number;
+  lastFrozen?: boolean;
   columnId: string;
   name: string;
   type: ColumnType;
@@ -226,8 +231,8 @@ export function HeaderCell({
     <div
       data-column-header="true"
       data-column-id={columnId}
-      className={`group relative h-8 shrink-0 text-xs font-normal text-muted ${selected ? "bg-primary/10 text-text" : headerColor ? "" : "bg-surface"}`}
-      style={{ width, backgroundColor: selected || !headerColor ? undefined : headerColor }}
+      className={`group ${stickyStart !== undefined ? "sticky z-[25]" : "relative"} h-8 shrink-0 text-xs font-normal text-muted ${selected ? "bg-primary/10 text-text" : headerColor ? "" : "bg-surface"} ${lastFrozen ? "border-e border-border" : ""}`}
+      style={{ width, backgroundColor: selected || !headerColor ? undefined : headerColor, insetInlineStart: stickyStart }}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();

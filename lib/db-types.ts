@@ -113,19 +113,22 @@ export const FILL_COLORS = [
 
 export type FillColor = (typeof FILL_COLORS)[number];
 
-export type NotificationType = "mention" | "assign" | "reply" | "status" | "due" | "share";
+export type NotificationType = "mention" | "assign" | "reply" | "status" | "due" | "share" | "invitation" | "access_request";
 
 export interface NotificationItem {
   id: string;
   userId: string;
   type: NotificationType;
-  sheetId: string;
+  /** Null for notifications that aren't about one sheet (invitations). */
+  sheetId: string | null;
   rowId: string | null;
   actorId: string | null;
   actorName: string;
   actorColor: string;
   sheetName: string;
   excerpt: string;
+  /** Where clicking the notification goes. */
+  href: string;
   createdAt: string;
   readAt: string | null;
 }
@@ -379,7 +382,7 @@ export interface WorkbookMember {
   email: string;
   role: Role;
   avatarColor: string;
-  boardRole: "owner" | "editor" | "viewer";
+  boardRole: "owner" | "editor" | "assigned" | "viewer";
   isOwner: boolean;
   addedAt: string;
 }

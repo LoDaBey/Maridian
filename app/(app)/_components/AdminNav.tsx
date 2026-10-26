@@ -6,18 +6,24 @@ import { can, type Role } from "@/lib/rbac";
 
 export function AdminNav({ role }: { role: Role }) {
   const pathname = usePathname();
-  if (!can(role, "user.manage")) {
+  const links = [
+    ...(can(role, "user.manage")
+      ? [
+          { href: "/admin/users", label: "Users", match: (path: string) => path === "/admin/users" },
+          {
+            href: "/admin/users/new",
+            label: "New user",
+            match: (path: string) => path.startsWith("/admin/users/new"),
+          },
+        ]
+      : []),
+    ...(can(role, "team.manage")
+      ? [{ href: "/admin/teams", label: "Teams", match: (path: string) => path.startsWith("/admin/teams") }]
+      : []),
+  ];
+  if (links.length === 0) {
     return null;
   }
-
-  const links = [
-    { href: "/admin/users", label: "Users", match: (path: string) => path === "/admin/users" },
-    {
-      href: "/admin/users/new",
-      label: "New user",
-      match: (path: string) => path.startsWith("/admin/users/new"),
-    },
-  ];
 
   return (
     <nav aria-label="Admin" className="flex items-center gap-1">

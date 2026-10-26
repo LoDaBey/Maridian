@@ -3,7 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { getSocket } from "@/lib/realtime/client";
 import type { Protection } from "@/lib/sheets/workbook-access";
-import { useGroups } from "@/stores/sheet-store";
+import { useGroups, useSheetStore } from "@/stores/sheet-store";
+import type { LocalRow } from "@/lib/sheets/apply-local";
 
 export interface ProtectionState {
   /** The whole tab is read-only for me. */
@@ -13,6 +14,8 @@ export interface ProtectionState {
   /** I'm the sheet owner or a workspace admin: I see and manage every lock. */
   canManage: boolean;
   protections: Protection[];
+  /** "Assigned only" members: whose items they may edit (null = no such limit). */
+  assignees: ReadonlySet<string> | null;
   refresh: () => void;
 }
 
@@ -22,6 +25,7 @@ const EMPTY: ProtectionState = {
   lockedGroups: new Set(),
   canManage: false,
   protections: [],
+  assignees: null,
   refresh: () => {},
 };
 
@@ -32,6 +36,7 @@ interface Reply {
   locks?: { tab: boolean; columns: string[]; groups: string[] };
   canManage?: boolean;
   protections?: Protection[];
+  assignees?: string[] | null;
 }
 
 export function ProtectionProvider({ sheetId, children }: { sheetId: string; children: ReactNode }) {
@@ -70,6 +75,7 @@ export function ProtectionProvider({ sheetId, children }: { sheetId: string; chi
       lockedGroups: new Set(reply?.locks?.groups ?? []),
       canManage: reply?.canManage ?? false,
       protections: reply?.protections ?? [],
+      assignees: reply?.assignees ? new Set(reply.assignees) : null,
       refresh,
     }),
     [reply, refresh],
@@ -82,15 +88,33 @@ export function useProtection(): ProtectionState {
   return useContext(Context);
 }
 
-/** True when this person may not edit this cell (locked column, or a row in a locked group). */
-export function useCellLocked(columnId: string, groupId: string | null | undefined): boolean {
+/**
+ * True when this person may not edit this cell: a locked column, a row in a locked group,
+ * or (for "assigned only" members) a row that isn't theirs or their team's.
+ */
+export function useCellLocked(columnId: string, row: Pick<LocalRow, "groupId" | "createdBy" | "data"> | undefined): boolean {
   const protection = useProtection();
   const groups = useGroups();
+  const store = useSheetStore();
   if (protection.tabLocked || protection.lockedColumns.has(columnId)) {
     return true;
   }
-  const group = groupId ?? groups[0]?.id;
-  return group !== undefined && protection.lockedGroups.has(group);
+  const group = row?.groupId ?? groups[0]?.id;
+  if (group !== undefined && protection.lockedGroups.has(group)) {
+    return true;
+  }
+  const people = protection.assignees;
+  if (!people || !row) {
+    return false;
+  }
+  if (row.createdBy && people.has(row.createdBy)) {
+    return false;
+  }
+  // Read columns without subscribing every cell to column changes; the row re-renders this.
+  return !Object.values(store.getState().columns).some((column) => {
+    const value = column.type === "person" ? row.data[column.id] : undefined;
+    return Array.isArray(value) && value.some((id) => typeof id === "string" && people.has(id));
+  });
 }
 
 /** For managers: is anything on this target protected (shows a lock icon even though they can edit). */

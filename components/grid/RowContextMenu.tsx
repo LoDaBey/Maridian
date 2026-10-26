@@ -7,6 +7,7 @@ import { Menu, MenuItem } from "@/components/ui/Menu";
 import { canDeleteRow } from "@/lib/rbac";
 import { useSheetStore } from "@/stores/sheet-store";
 import { useMe, canDo } from "./MeContext";
+import { useCellComments } from "./CellComments";
 
 export function RowContextMenu({
   menu,
@@ -28,6 +29,7 @@ export function RowContextMenu({
   const archived = useStore(store, (state) => state.archived);
   const me = useMe();
   const [history, setHistory] = useState<{ rowId: string; columnId: string; x: number; y: number } | null>(null);
+  const comments = useCellComments();
   const columnId = menu ? columnUnderPointer(menu.x, menu.y, menu.rowId) : null;
   const allowed = targets.length > 0 && targets.every((rowId) => !me.viewOnly && canDeleteRow(me, { created_by: store.getState().rows[rowId]?.createdBy ?? null }));
 
@@ -70,6 +72,18 @@ export function RowContextMenu({
         title={allowed ? undefined : "You can only delete rows you created."}
         onSelect={() => {
           onDelete(targets);
+          onClose();
+        }}
+      />
+      <MenuItem
+        label="Comment"
+        disabled={!columnId}
+        title={columnId ? undefined : "Right-click a cell to comment on it."}
+        onSelect={() => {
+          if (!columnId || !menu) {
+            return;
+          }
+          comments.open({ rowId: menu.rowId, columnId, x: menu.x, y: menu.y });
           onClose();
         }}
       />

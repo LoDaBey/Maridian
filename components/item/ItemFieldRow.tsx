@@ -34,7 +34,7 @@ export function ItemFieldRow({
   const [editing, setEditing] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const automatic = isAutomaticColumnType(column.type);
-  const protectedCell = useCellLocked(column.id, row.groupId);
+  const protectedCell = useCellLocked(column.id, row);
   const locked = readOnly || automatic || protectedCell;
   const value = row.data[column.id];
   const inline = column.type === "text" || column.type === "number";

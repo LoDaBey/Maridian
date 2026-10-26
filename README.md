@@ -26,6 +26,7 @@ Architecture and ticket order: [tickets/00-README.md](tickets/00-README.md).
 2. In Render, go to New, then Blueprint, and pick the repo.
 3. Choose: new database, **or** delete the `databases` block and paste the existing DB's **Internal** URL into `DATABASE_URL` (same region as the web service). Tables are prefixed `monitor_`, so this app can share a database that already exists.
 4. Set `APP_URL` to the Render URL (e.g. `https://monitor.onrender.com`). It must match exactly, or sockets are refused by the origin check.
+   Optional, for invitation and access-request emails: `RESEND_API_KEY` (from resend.com) and `EMAIL_FROM` (e.g. `Meridian <no-reply@yourdomain.com>`, on a domain verified in Resend). Without them, invitations still arrive in the app's bell and banner.
 5. Deploy. `preDeployCommand` runs the schema.
 6. Run `db/scripts/create_first_admin.sql` once (Render shell, or locally with the **External** URL and `DATABASE_SSL=true`):
 

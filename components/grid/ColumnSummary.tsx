@@ -11,7 +11,10 @@ export function ColumnSummary({
   gutter,
   users,
   label,
+  frozenStarts = [],
 }: {
+  /** Inline-start offsets of the frozen columns, in order. */
+  frozenStarts?: number[];
   columns: LocalColumn[];
   widths: number[];
   rows: Array<{ data: Record<string, JsonValue>; createdBy: string | null }>;
@@ -27,8 +30,8 @@ export function ColumnSummary({
       {columns.map((column, index) => (
         <div
           key={column.id}
-          className="flex h-10 shrink-0 items-center justify-center overflow-hidden px-2 text-center"
-          style={{ width: widths[index] ?? column.width }}
+          className={`flex h-10 shrink-0 items-center justify-center overflow-hidden px-2 text-center ${index < frozenStarts.length ? "sticky z-[5] bg-surface" : ""}`}
+          style={{ width: widths[index] ?? column.width, insetInlineStart: frozenStarts[index] }}
         >
           <SummaryValue column={column} rows={rows} users={users} />
         </div>

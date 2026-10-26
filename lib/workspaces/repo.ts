@@ -49,6 +49,11 @@ export interface WorkspaceInvitationView {
   role: "admin" | "member";
   invitedByName: string | null;
   createdAt: string;
+  message: string;
+  expiresAt: string;
+  expired: boolean;
+  /** Sheet the invitation also opens, if any. */
+  workbookName: string | null;
 }
 
 export interface MyInvitation {
@@ -59,7 +64,14 @@ export interface MyInvitation {
   role: "admin" | "member";
   invitedByName: string | null;
   createdAt: string;
+  message: string;
+  expiresAt: string;
+  expired: boolean;
+  workbookName: string | null;
 }
+
+/** How long an invitation stays open; "Resend" starts the clock again. */
+export const INVITATION_DAYS = 14;
 
 export { WORKSPACE_COLORS } from "./colors";
 
@@ -80,13 +92,15 @@ interface WorkspaceRow {
   member_count: string | number;
 }
 
-function mapWorkspace(row: WorkspaceRow): WorkspaceSummary {
+function mapWorkspace(row: WorkspaceRow, viewer: Viewer): WorkspaceSummary {
+  // Operations managers act as admins in every workspace they belong to.
+  const role = row.member_role === "member" && can(viewer.role, "sheet.view_all") ? "admin" : (row.member_role ?? "owner");
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     color: row.color,
-    role: row.member_role ?? "owner",
+    role,
     isMember: row.member_role !== null,
     memberCount: Number(row.member_count),
   };
@@ -107,7 +121,7 @@ export async function listMyWorkspaces(viewer: Viewer): Promise<WorkspaceSummary
      ORDER BY lower(ws.name), ws.created_at`,
     [viewer.id],
   );
-  return rows.map(mapWorkspace);
+  return rows.map((row) => mapWorkspace(row, viewer));
 }
 
 export async function getWorkspace(viewer: Viewer, workspaceId: string): Promise<WorkspaceSummary | null> {
@@ -122,7 +136,7 @@ export async function getWorkspace(viewer: Viewer, workspaceId: string): Promise
   if (!row.member_role && !can(viewer.role, "workspace.manage_all")) {
     return null;
   }
-  return mapWorkspace(row);
+  return mapWorkspace(row, viewer);
 }
 
 async function requireManager(viewer: Viewer, workspaceId: string): Promise<WorkspaceSummary> {
@@ -193,7 +207,8 @@ export async function listManagedWorkbookIds(viewer: Viewer): Promise<string[]> 
        )
        OR EXISTS (
          SELECT 1 FROM monitor_workspace_members wm
-         WHERE wm.workspace_id = w.workspace_id AND wm.user_id = $1 AND wm.role IN ('owner', 'admin')
+         WHERE wm.workspace_id = w.workspace_id AND wm.user_id = $1
+           AND (wm.role IN ('owner', 'admin')${can(viewer.role, "sheet.view_all") ? " OR TRUE" : ""})
        )
      )`,
     [viewer.id],
@@ -257,12 +272,16 @@ export async function listPendingInvitations(workspaceId: string): Promise<Works
     role: "admin" | "member";
     invited_by_name: string | null;
     created_at: Date;
+    message: string;
+    expires_at: Date;
+    workbook_name: string | null;
   }>(
     `SELECT i.id, i.user_id, u.full_name, u.email, u.avatar_color, i.role,
-            inviter.full_name AS invited_by_name, i.created_at
+            inviter.full_name AS invited_by_name, i.created_at, i.message, i.expires_at, wb.name AS workbook_name
      FROM monitor_workspace_invitations i
      JOIN monitor_users u ON u.id = i.user_id
      LEFT JOIN monitor_users inviter ON inviter.id = i.invited_by
+     LEFT JOIN monitor_workbooks wb ON wb.id = i.workbook_id AND wb.deleted_at IS NULL
      WHERE i.workspace_id = $1 AND i.status = 'pending'
      ORDER BY i.created_at DESC`,
     [workspaceId],
@@ -276,6 +295,10 @@ export async function listPendingInvitations(workspaceId: string): Promise<Works
     role: row.role,
     invitedByName: row.invited_by_name,
     createdAt: row.created_at.toISOString(),
+    message: row.message,
+    expiresAt: row.expires_at.toISOString(),
+    expired: row.expires_at.getTime() < Date.now(),
+    workbookName: row.workbook_name,
   }));
 }
 
@@ -288,12 +311,16 @@ export async function listMyInvitations(userId: string): Promise<MyInvitation[]>
     role: "admin" | "member";
     invited_by_name: string | null;
     created_at: Date;
+    message: string;
+    expires_at: Date;
+    workbook_name: string | null;
   }>(
     `SELECT i.id, i.workspace_id, ws.name AS workspace_name, ws.color AS workspace_color, i.role,
-            inviter.full_name AS invited_by_name, i.created_at
+            inviter.full_name AS invited_by_name, i.created_at, i.message, i.expires_at, wb.name AS workbook_name
      FROM monitor_workspace_invitations i
      JOIN monitor_workspaces ws ON ws.id = i.workspace_id
      LEFT JOIN monitor_users inviter ON inviter.id = i.invited_by
+     LEFT JOIN monitor_workbooks wb ON wb.id = i.workbook_id AND wb.deleted_at IS NULL
      WHERE i.user_id = $1 AND i.status = 'pending'
      ORDER BY i.created_at DESC`,
     [userId],
@@ -306,6 +333,10 @@ export async function listMyInvitations(userId: string): Promise<MyInvitation[]>
     role: row.role,
     invitedByName: row.invited_by_name,
     createdAt: row.created_at.toISOString(),
+    message: row.message,
+    expiresAt: row.expires_at.toISOString(),
+    expired: row.expires_at.getTime() < Date.now(),
+    workbookName: row.workbook_name,
   }));
 }
 
@@ -315,20 +346,52 @@ export async function inviteToWorkspace(input: {
   workspaceId: string;
   userIds: string[];
   role: "admin" | "member";
+  message?: string;
+  /** Also open this sheet (in this workspace) for them once they accept. */
+  workbookId?: string;
+  boardRole?: "editor" | "assigned" | "viewer";
+  /** The caller already checked the actor may share that sheet. */
+  allowSheetSharer?: boolean;
 }): Promise<string[]> {
-  await requireManager(input.actor, input.workspaceId);
+  const workspace = await getWorkspace(input.actor, input.workspaceId);
+  if (!workspace) {
+    throw new WorkspaceActionError("Workspace not found.");
+  }
+  const manager = isWorkspaceManager(workspace.role);
+  if (!manager && !input.allowSheetSharer && !(workspace.isMember && can(input.actor.role, "workspace.invite"))) {
+    throw new WorkspaceActionError("Only workspace admins and project managers can invite people.");
+  }
+  if (!manager && input.role === "admin") {
+    throw new WorkspaceActionError("Only workspace owners and admins can invite admins.");
+  }
+  // Re-inviting someone with an open invitation refreshes it (new note, sheet and expiry).
   const invited = await query<{ user_id: string }>(
-    `INSERT INTO monitor_workspace_invitations (workspace_id, user_id, role, invited_by)
-     SELECT $1, u.id, $3, $4
+    `INSERT INTO monitor_workspace_invitations (workspace_id, user_id, role, invited_by, message, workbook_id, board_role, expires_at)
+     SELECT $1, u.id, $3, $4, $5,
+            (SELECT w.id FROM monitor_workbooks w WHERE w.id = $6::uuid AND w.workspace_id = $1 AND w.deleted_at IS NULL),
+            $7, now() + make_interval(days => $8)
      FROM monitor_users u
      WHERE u.id = ANY($2::uuid[])
        AND u.is_active = true
        AND NOT EXISTS (
          SELECT 1 FROM monitor_workspace_members m WHERE m.workspace_id = $1 AND m.user_id = u.id
        )
-     ON CONFLICT (workspace_id, user_id) WHERE status = 'pending' DO NOTHING
+     ON CONFLICT (workspace_id, user_id) WHERE status = 'pending' DO UPDATE
+       SET message = EXCLUDED.message,
+           workbook_id = COALESCE(EXCLUDED.workbook_id, monitor_workspace_invitations.workbook_id),
+           board_role = COALESCE(EXCLUDED.board_role, monitor_workspace_invitations.board_role),
+           expires_at = EXCLUDED.expires_at
      RETURNING user_id`,
-    [input.workspaceId, input.userIds, input.role, input.actor.id],
+    [
+      input.workspaceId,
+      input.userIds,
+      input.role,
+      input.actor.id,
+      (input.message ?? "").trim().slice(0, 500),
+      input.workbookId ?? null,
+      input.workbookId ? (input.boardRole ?? "editor") : null,
+      INVITATION_DAYS,
+    ],
   );
   return invited.map((row) => row.user_id);
 }
@@ -353,14 +416,41 @@ export async function cancelInvitation(input: {
   return { userId: invitation.user_id, workspaceId: invitation.workspace_id };
 }
 
+/** Moves the expiry forward. Workspace managers or whoever sent it may resend. */
+export async function resendInvitation(input: { actor: Viewer; invitationId: string }): Promise<{ userId: string; workspaceId: string }> {
+  const rows = await query<{ workspace_id: string; user_id: string; invited_by: string | null }>(
+    `SELECT workspace_id, user_id, invited_by FROM monitor_workspace_invitations WHERE id = $1 AND status = 'pending'`,
+    [input.invitationId],
+  );
+  const invitation = rows[0];
+  if (!invitation) {
+    throw new WorkspaceActionError("Invitation not found.");
+  }
+  if (invitation.invited_by !== input.actor.id) {
+    await requireManager(input.actor, invitation.workspace_id);
+  }
+  await query(
+    `UPDATE monitor_workspace_invitations SET expires_at = now() + make_interval(days => $2) WHERE id = $1`,
+    [input.invitationId, INVITATION_DAYS],
+  );
+  return { userId: invitation.user_id, workspaceId: invitation.workspace_id };
+}
+
 export async function respondToInvitation(input: {
   userId: string;
   invitationId: string;
   accept: boolean;
-}): Promise<{ workspaceId: string }> {
+}): Promise<{ workspaceId: string; workbookId: string | null }> {
   return tx(async (client) => {
-    const rows = await client.query<{ workspace_id: string; role: "admin" | "member"; invited_by: string | null }>(
-      `SELECT workspace_id, role, invited_by
+    const rows = await client.query<{
+      workspace_id: string;
+      role: "admin" | "member";
+      invited_by: string | null;
+      workbook_id: string | null;
+      board_role: "editor" | "assigned" | "viewer" | null;
+      expired: boolean;
+    }>(
+      `SELECT workspace_id, role, invited_by, workbook_id, board_role, expires_at < now() AS expired
        FROM monitor_workspace_invitations
        WHERE id = $1 AND user_id = $2 AND status = 'pending'
        FOR UPDATE`,
@@ -369,6 +459,9 @@ export async function respondToInvitation(input: {
     const invitation = rows.rows[0];
     if (!invitation) {
       throw new WorkspaceActionError("This invitation is no longer available.");
+    }
+    if (input.accept && invitation.expired) {
+      throw new WorkspaceActionError("This invitation has expired. Ask the person who invited you to resend it.");
     }
     await client.query(
       `UPDATE monitor_workspace_invitations
@@ -383,8 +476,16 @@ export async function respondToInvitation(input: {
          ON CONFLICT (workspace_id, user_id) DO NOTHING`,
         [invitation.workspace_id, input.userId, invitation.role, invitation.invited_by],
       );
+      if (invitation.workbook_id) {
+        await client.query(
+          `INSERT INTO monitor_workbook_members (workbook_id, user_id, added_by, role)
+           SELECT w.id, $2, $3, $4 FROM monitor_workbooks w WHERE w.id = $1 AND w.deleted_at IS NULL
+           ON CONFLICT (workbook_id, user_id) DO NOTHING`,
+          [invitation.workbook_id, input.userId, invitation.invited_by, invitation.board_role ?? "editor"],
+        );
+      }
     }
-    return { workspaceId: invitation.workspace_id };
+    return { workspaceId: invitation.workspace_id, workbookId: input.accept ? invitation.workbook_id : null };
   });
 }
 

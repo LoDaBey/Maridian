@@ -13,6 +13,10 @@ import { CellPresenceOverlay } from "@/components/presence/CellPresenceOverlay";
 import { CellValue } from "./renderers/CellValue";
 import { useCellLocked } from "./ProtectionContext";
 import type { DirectoryUser } from "./types";
+import { readRules, ruleColor } from "@/lib/sheets/conditional";
+import { CommentMarker } from "./CellComments";
+
+const NO_USERS: ReadonlyMap<string, string> = new Map();
 
 const NAME_OPEN_DELAY_MS = 250;
 
@@ -56,10 +60,15 @@ export const GridCell = memo(function GridCell({
   onInvalid,
   onAddOption,
   onOpenLink,
+  stickyStart,
+  lastFrozen,
 }: {
   rowId: string;
   columnId: string;
   width: number;
+  /** Frozen column: inline-start offset where it sticks while scrolling sideways. */
+  stickyStart?: number;
+  lastFrozen?: boolean;
   active: boolean;
   inRange: boolean;
   editing: boolean;
@@ -82,7 +91,7 @@ export const GridCell = memo(function GridCell({
   const value = useCell(rowId, columnId);
   const column = useColumn(columnId);
   const row = useRow(rowId);
-  const protectedCell = useCellLocked(columnId, row?.groupId);
+  const protectedCell = useCellLocked(columnId, row);
   const nameOpenTimer = useRef<number>(0);
 
   useEffect(() => {
@@ -101,6 +110,15 @@ export const GridCell = memo(function GridCell({
   const dueTone =
     column.type === "due_date" && typeof value === "string" ? dueToneFor(value, done) : null;
 
+  // Conditional formatting paints over the column's plain cell colour.
+  const rules = readRules(column.settings);
+  const ruleFill =
+    rules.length > 0
+      ? ruleColor(rules, column, value, column.type === "person" || column.type === "created_by" ? new Map(users.map((user) => [user.id, user.fullName])) : NO_USERS)
+      : undefined;
+  const fill = ruleFill ?? fillColor;
+  const frozen = stickyStart !== undefined;
+
   const linkUrl =
     column.type === "link" && value && typeof value === "object" && !Array.isArray(value) && typeof value.url === "string"
       ? value.url
@@ -114,8 +132,8 @@ export const GridCell = memo(function GridCell({
       data-column-id={columnId}
       data-active={active ? "true" : undefined}
       data-flash={flash ? "true" : undefined}
-      className={`relative h-10 shrink-0 text-[13px] text-text ${inRange ? "bg-selection" : fillColor ? "" : "bg-transparent"} ${active ? "outline outline-2 -outline-offset-2 outline-primary" : ""} ${flash ? "[animation:presence-flash_0.6s_ease-in-out_2]" : ""}`}
-      style={{ width, backgroundColor: inRange || !fillColor ? undefined : fillColor }}
+      className={`${frozen ? "sticky z-[5]" : "relative"} h-10 shrink-0 text-[13px] text-text ${inRange ? "bg-selection" : fill ? "" : frozen ? "bg-inherit" : "bg-transparent"} ${lastFrozen ? "border-e border-border" : ""} ${ruleFill && !inRange && !ownColor ? "[&_*]:!text-[#323338] !text-[#323338]" : ""} ${active ? "outline outline-2 -outline-offset-2 outline-primary" : ""} ${flash ? "[animation:presence-flash_0.6s_ease-in-out_2]" : ""}`}
+      style={{ width, backgroundColor: inRange || !fill ? undefined : fill, insetInlineStart: stickyStart }}
       onMouseDown={(event) => {
         if (event.metaKey || event.ctrlKey) {
           if (linkUrl) {
@@ -160,6 +178,7 @@ export const GridCell = memo(function GridCell({
       }}
     >
       <CellPresenceOverlay rowId={rowId} columnId={columnId} editing={editing && !locked} />
+      <CommentMarker rowId={rowId} columnId={columnId} />
       {editing && !locked ? (
         <FieldEditor
           column={column}

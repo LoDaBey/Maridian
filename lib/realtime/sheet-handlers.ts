@@ -1,9 +1,11 @@
 import type { Socket } from "socket.io";
 import { z } from "zod";
 import type { SessionUser } from "@/lib/auth/session";
-import { can } from "@/lib/rbac";
+import { can, roleRank } from "@/lib/rbac";
+import { teamIdsFor } from "@/lib/teams/repo";
 import { applyOp, type ApplyResult } from "@/lib/sheets/apply-op";
 import { loadSnapshot } from "@/lib/sheets/snapshot";
+import { packRows } from "@/lib/sheets/snapshot-pack";
 import { getSheetAccess, loadProtections, locksFor, userCanAccessSheet } from "@/lib/sheets/workbook-access";
 import {
   joinSheetPresence,
@@ -83,7 +85,8 @@ export function registerSheetHandlers(socket: Socket): void {
         self: joined.self,
         others: joined.others,
       });
-      return { ok: true, snapshot, presence: joined.others };
+      const { rows, ...rest } = snapshot;
+      return { ok: true, snapshot: { ...rest, rows: [], packed: packRows(rows) }, presence: joined.others };
     });
   });
 
@@ -105,6 +108,13 @@ export function registerSheetHandlers(socket: Socket): void {
         locks: locksFor(access, user.id, protections),
         canManage: access.canManage,
         protections: access.canManage ? protections : [],
+        // "Assigned only": the people whose items this person may edit.
+        assignees:
+          access.role === "assigned"
+            ? roleRank(user.role) >= roleRank("team_leader")
+              ? await teamIdsFor(user.id)
+              : [user.id]
+            : null,
       } as unknown as SheetAck;
     });
   });

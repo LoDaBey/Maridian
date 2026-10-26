@@ -15,6 +15,7 @@ export function useGridKeyboard({
   onUndo,
   onRedo,
   onToggleCheckbox,
+  onFind,
 }: {
   direction: SheetDirection;
   readOnly: boolean;
@@ -27,6 +28,7 @@ export function useGridKeyboard({
   onUndo: () => void;
   onRedo: () => void;
   onToggleCheckbox: () => void;
+  onFind?: () => void;
 }): (event: ReactKeyboardEvent<HTMLElement>) => void {
   return useCallback(
     (event) => {
@@ -47,6 +49,11 @@ export function useGridKeyboard({
       if (command && key.toLowerCase() === "y") {
         event.preventDefault();
         onRedo();
+        return;
+      }
+      if (command && (key.toLowerCase() === "f" || key.toLowerCase() === "h") && onFind) {
+        event.preventDefault();
+        onFind();
         return;
       }
       if (command && key.toLowerCase() === "c") {
@@ -93,6 +100,6 @@ export function useGridKeyboard({
         onEdit(key);
       }
     },
-    [direction, editing, onClear, onCopy, onEdit, onMove, onRedo, onTab, onToggleCheckbox, onUndo, readOnly],
+    [direction, editing, onClear, onCopy, onEdit, onMove, onRedo, onTab, onToggleCheckbox, onUndo, readOnly, onFind],
   );
 }

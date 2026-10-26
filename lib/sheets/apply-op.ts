@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import type { SessionUser } from "@/lib/auth/session";
 import { tx } from "@/lib/db";
 import { isAutomaticColumnType, type ColumnType } from "@/lib/db-types";
-import { can, canDeleteRow, type Action } from "@/lib/rbac";
+import { can, canDeleteRow, roleRank, type Action } from "@/lib/rbac";
 import { insertNotifications, type CreatedNotification, type PendingNotification } from "@/lib/notifications/repo";
 import {
   sheetOpSchema,
@@ -21,7 +21,8 @@ import {
   normalizeSettings,
   normalizeValue,
 } from "@/lib/sheets/values";
-import { protectionBlock } from "@/lib/sheets/protection-check";
+import { assignedBlock, protectionBlock } from "@/lib/sheets/protection-check";
+import { teamIdsFor } from "@/lib/teams/repo";
 import { ensureMembersForSheet, getSheetAccess, loadProtections, locksFor } from "@/lib/sheets/workbook-access";
 
 const CACHE_LIMIT = 10_000;
@@ -162,6 +163,14 @@ async function applyInside(
   }
   if (access.role === "viewer") {
     return { ok: false, code: "read_only", message: "You can view this sheet but not edit it." };
+  }
+  if (access.role === "assigned") {
+    // Team leaders also manage their team's items.
+    const people = roleRank(user.role) >= roleRank("team_leader") ? await teamIdsFor(user.id) : [user.id];
+    const notMine = await assignedBlock(client, op, people);
+    if (notMine) {
+      return { ok: false, code: "forbidden", message: notMine };
+    }
   }
   const blocked = await protectionBlock(
     client,
